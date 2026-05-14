@@ -8,6 +8,9 @@
   --green: #d8efe4;
   --pink: #f48da5;
   --pink-soft: #fff0f4;
+  --brand-blue: #2f7194;
+  --brand-blue-dark: #244c65;
+  --brand-blue-soft: #eaf6fb;
   --teal: #2fc19d;
   --deep: #29465a;
   --danger: #d94d4d;
@@ -20,7 +23,7 @@
 body {
   margin: 0;
   color: var(--ink);
-  background: linear-gradient(135deg, #f7fbfa, #fff6f1);
+  background: linear-gradient(135deg, #f7fbfa, #edf7fb);
   font-family: Inter, Pretendard, "Noto Sans KR", system-ui, sans-serif;
 }
 
@@ -77,7 +80,7 @@ button {
 
 .auth-card h1 {
   font-size: 44px;
-  color: var(--deep);
+  color: var(--brand-blue-dark);
 }
 
 .topbar,
@@ -134,11 +137,11 @@ button {
   padding: 8px 10px;
   border-radius: 9px;
   color: #fff;
-  background: var(--pink);
+  background: var(--brand-blue);
 }
 
 .brand strong {
-  color: var(--pink);
+  color: var(--brand-blue);
 }
 
 .topbar nav {
@@ -152,8 +155,8 @@ button {
 .tabs button.active,
 .primary {
   color: #fff !important;
-  background: var(--pink) !important;
-  border-color: var(--pink) !important;
+  background: var(--brand-blue) !important;
+  border-color: var(--brand-blue) !important;
 }
 
 .has-unread:not(.active),
@@ -211,7 +214,7 @@ button {
 
 .hero h1 {
   margin: 0;
-  color: var(--deep);
+  color: var(--brand-blue-dark);
   font-size: 54px;
 }
 

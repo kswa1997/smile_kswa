@@ -23,8 +23,8 @@ import {
 import "./styles.css";
 
 const DB = "https://smile-of-kswa-default-rtdb.firebaseio.com";
-const ADMIN_ID = "admin";
-const ADMIN_PW = "kswa2026";
+const ADMIN_ID = "kswa1997";
+const ADMIN_PW = "love1004";
 const REVIEW_MILEAGE = 30000;
 const MAX_MILEAGE = 1200000;
 const PASSWORD_RULE = /^[A-Za-z]{4}\d{4}$/;
@@ -348,7 +348,7 @@ function App() {
       recipientId: form.recipientId,
       recipientName: recipient ? memberLabel(recipient) : "전체 회원",
       scope: form.recipientId === "all" ? "all" : "member",
-      title: form.title.trim() || "Smile 공지",
+      title: form.title.trim() || "Smile of KSWA 공지",
       content: form.content.trim(),
       senderId: isAdmin ? "admin" : sessionUser.id,
       senderName: isAdmin ? "관리자" : `${sessionUser.name} 부관리자`,
@@ -436,7 +436,7 @@ function App() {
     <main className="app">
       <header className="topbar">
         <button className="brand" type="button" onClick={() => setPage("home")}>
-          <span>Smile</span>
+          <span>Smile of KSWA</span>
           <strong>심사 Mileage</strong>
         </button>
         <nav>
@@ -485,7 +485,7 @@ function AuthScreen({ mode, setMode, login, register, submitPwRequest, loading, 
     <main className="auth">
       <section className="auth-card">
         <img src="/assets/kswa-main.png" alt="한국사회복지행정학회" />
-        <h1>Smile</h1>
+        <h1>Smile of KSWA</h1>
         <p>한국사회복지행정학 심사 Mileage</p>
         <div className="notice">비밀번호는 <strong>영어 4자리 + 숫자 4자리</strong> 총 8자리입니다. 예: <strong>abcd1234</strong></div>
         <div className="tabs">
@@ -552,7 +552,7 @@ function HomePage({ user, data, isAdmin, canAdmin, refresh, loading }) {
         <img src="/assets/kswa-main.png" alt="한국사회복지행정학회" />
         <div>
           <p>Academy of Korean Social Welfare Administration</p>
-          <h1>Smile</h1>
+          <h1>Smile of KSWA</h1>
           <strong>한국사회복지행정학 심사 Mileage</strong>
         </div>
       </section>
