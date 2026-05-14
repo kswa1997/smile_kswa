@@ -24,7 +24,15 @@ import {
 } from "lucide-react";
 import "./styles.css";
 
-const DB = (import.meta.env.VITE_FIREBASE_DB_URL || "https://smile-of-kswa-default-rtdb.firebaseio.com").replace(/\/$/, "");
+const PROJECT_ID = "smile-of-kswa";
+const CONFIGURED_DB = import.meta.env.VITE_FIREBASE_DB_URL?.replace(/\/$/, "");
+const DB_CANDIDATES = [
+  CONFIGURED_DB,
+  `https://${PROJECT_ID}.firebaseio.com`,
+  `https://${PROJECT_ID}-default-rtdb.firebaseio.com`,
+  `https://${PROJECT_ID}-default-rtdb.asia-southeast1.firebasedatabase.app`,
+  `https://${PROJECT_ID}-default-rtdb.europe-west1.firebasedatabase.app`,
+].filter(Boolean);
 const ADMIN_ID = "kswa1997";
 const ADMIN_PW = "love1004";
 const REVIEW_MILEAGE = 30000;
@@ -958,42 +966,71 @@ async function fetchRemoteData() {
   };
 }
 
+let resolvedDbUrl = "";
+
+async function resolveDbUrl() {
+  if (resolvedDbUrl) return resolvedDbUrl;
+  const checked = [...new Set(DB_CANDIDATES)];
+  for (const url of checked) {
+    try {
+      const response = await fetch(`${url}/.json?shallow=true`);
+      if (response.status !== 404) {
+        resolvedDbUrl = url;
+        return resolvedDbUrl;
+      }
+    } catch {
+      // Keep checking the next possible Realtime Database host.
+    }
+  }
+  const error = new Error("Firebase Realtime Database was not found");
+  error.status = 404;
+  error.code = "DB_NOT_FOUND";
+  throw error;
+}
+
+async function firebaseRequest(path, options = {}) {
+  const dbUrl = await resolveDbUrl();
+  const response = await fetch(`${dbUrl}/${path}.json`, options);
+  if (!response.ok) {
+    const error = new Error(`${options.method || "GET"} ${path} failed (${response.status})`);
+    error.status = response.status;
+    throw error;
+  }
+  return response;
+}
+
 async function fbGet(path) {
-  const response = await fetch(`${DB}/${path}.json`);
-  if (!response.ok) throw new Error(`GET ${path} failed`);
+  const response = await firebaseRequest(path);
   const data = await response.json();
   return data === null ? undefined : data;
 }
 
 async function fbPatch(path, value) {
-  const response = await fetch(`${DB}/${path}.json`, {
+  await firebaseRequest(path, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(value),
   });
-  if (!response.ok) throw new Error(`PATCH ${path} failed`);
 }
 
 async function fbPut(path, value) {
-  const response = await fetch(`${DB}/${path}.json`, {
+  await firebaseRequest(path, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(value),
   });
-  if (!response.ok) throw new Error(`PUT ${path} failed (${response.status})`);
 }
 
 async function fbDelete(path) {
-  const response = await fetch(`${DB}/${path}.json`, { method: "DELETE" });
-  if (!response.ok) throw new Error(`DELETE ${path} failed`);
+  await firebaseRequest(path, { method: "DELETE" });
 }
 
 function firebaseErrorText(err, action) {
   const text = String(err?.message || err || "");
-  if (text.includes("404")) {
-    return `${action}을 저장하지 못했습니다. Firebase Realtime Database 주소가 맞는지 확인해주세요.`;
+  if (err?.code === "DB_NOT_FOUND" || err?.status === 404 || text.includes("404")) {
+    return `${action}을 저장하지 못했습니다. Firebase Realtime Database가 아직 만들어지지 않았거나 URL이 다릅니다. Firebase 콘솔에서 Realtime Database를 만든 뒤, Vercel 환경변수 VITE_FIREBASE_DB_URL에 실제 DB URL을 넣어주세요.`;
   }
-  if (text.includes("401") || text.includes("403") || text.toLowerCase().includes("permission")) {
+  if (err?.status === 401 || err?.status === 403 || text.includes("401") || text.includes("403") || text.toLowerCase().includes("permission")) {
     return `${action}을 저장하지 못했습니다. Firebase Realtime Database 읽기/쓰기 규칙을 확인해주세요.`;
   }
   return `${action}을 저장하지 못했습니다. 잠시 후 다시 시도해주세요.`;
