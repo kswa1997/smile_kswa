@@ -7,6 +7,8 @@ import {
   Crown,
   Download,
   Edit3,
+  Eye,
+  EyeOff,
   FileSpreadsheet,
   KeyRound,
   LogOut,
@@ -22,7 +24,7 @@ import {
 } from "lucide-react";
 import "./styles.css";
 
-const DB = "https://smile-of-kswa-default-rtdb.firebaseio.com";
+const DB = (import.meta.env.VITE_FIREBASE_DB_URL || "https://smile-of-kswa-default-rtdb.firebaseio.com").replace(/\/$/, "");
 const ADMIN_ID = "kswa1997";
 const ADMIN_PW = "love1004";
 const REVIEW_MILEAGE = 30000;
@@ -155,42 +157,60 @@ function App() {
     }
   }
 
+  async function fetchSignupContext() {
+    const [membersResult, signupResult] = await Promise.allSettled([fbGet("members"), fbGet("signupRequests")]);
+    return {
+      ...dataRef.current,
+      members: membersResult.status === "fulfilled" ? toArray(membersResult.value).sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""), "ko")) : dataRef.current.members,
+      signupRequests: signupResult.status === "fulfilled" ? toArray(signupResult.value).sort(sortNewest) : dataRef.current.signupRequests,
+    };
+  }
+
   async function register(form) {
     clearAlerts();
-    if (!form.name.trim() || !form.affiliation.trim() || !form.phone.trim()) {
+    const trimmed = {
+      name: form.name.trim(),
+      affiliation: form.affiliation.trim(),
+      phone: form.phone.trim(),
+      password: form.password.trim(),
+    };
+    if (!trimmed.name || !trimmed.affiliation || !trimmed.phone) {
       setError("이름, 소속, 전화번호를 모두 입력해주세요.");
       return;
     }
-    if (!PASSWORD_RULE.test(form.password)) {
+    if (!PASSWORD_RULE.test(trimmed.password)) {
       setError("비밀번호는 영어 4자리 + 숫자 4자리 형식입니다. 예: abcd1234");
       return;
     }
-    if (form.password !== form.passwordConfirm) {
+    if (trimmed.password !== form.passwordConfirm.trim()) {
       setError("비밀번호 확인이 일치하지 않습니다.");
       return;
     }
     setLoading(true);
     try {
-      const remote = await fetchRemoteData();
-      const duplicateMember = remote.members.some((item) => item.name === form.name.trim() && item.phone === form.phone.trim());
-      const duplicateRequest = remote.signupRequests.some((item) => item.status === "pending" && item.name === form.name.trim() && item.phone === form.phone.trim());
+      const remote = await fetchSignupContext();
+      const duplicateMember = remote.members.some((item) => item.name === trimmed.name && item.phone === trimmed.phone);
+      const duplicateRequest = remote.signupRequests.some((item) => item.status === "pending" && item.name === trimmed.name && item.phone === trimmed.phone);
       if (duplicateMember || duplicateRequest) {
         setError("이미 등록되었거나 승인 대기 중인 가입 신청이 있습니다.");
         return;
       }
       const request = {
         id: makeId("signup"),
-        name: form.name.trim(),
-        affiliation: form.affiliation.trim(),
-        phone: form.phone.trim(),
-        password: form.password,
+        name: trimmed.name,
+        affiliation: trimmed.affiliation,
+        phone: trimmed.phone,
+        password: trimmed.password,
         status: "pending",
         requestedAt: now(),
       };
-      await fbPatch("signupRequests", { [firebaseKey(request.id)]: cleanFirebase(request) });
+      await fbPut(`signupRequests/${firebaseKey(request.id)}`, cleanFirebase(request));
       updateData({ ...remote, signupRequests: [request, ...remote.signupRequests] });
       setAuthMode("login");
-      setMessage("가입 신청이 접수되었습니다. 관리자 승인 후 로그인할 수 있습니다.");
+      setMessage("가입신청이 정상적으로 접수되었습니다. 관리자에게 가입을 요청했음.");
+    } catch (err) {
+      console.error(err);
+      setError(firebaseErrorText(err, "가입신청"));
     } finally {
       setLoading(false);
     }
@@ -507,9 +527,24 @@ function LoginForm({ login, loading }) {
   return (
     <form className="form" onSubmit={(event) => { event.preventDefault(); login(form); }}>
       <label>이름 또는 관리자 ID<input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="이름 입력" /></label>
-      <label>비밀번호<input type="password" value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} placeholder="영어4+숫자4 예: abcd1234" /></label>
+      <PasswordField label="비밀번호" value={form.password} onChange={(value) => setForm({ ...form, password: value })} placeholder="영어4+숫자4 예: abcd1234" />
       <button className="primary" disabled={loading} type="submit">로그인</button>
     </form>
+  );
+}
+
+function PasswordField({ label, value, onChange, placeholder }) {
+  const [visible, setVisible] = useState(false);
+  return (
+    <label>
+      {label}
+      <span className="password-field">
+        <input type={visible ? "text" : "password"} value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} />
+        <button aria-label={visible ? `${label} 숨기기` : `${label} 보기`} type="button" onClick={() => setVisible((next) => !next)}>
+          {visible ? <EyeOff size={18} /> : <Eye size={18} />}
+        </button>
+      </span>
+    </label>
   );
 }
 
@@ -522,8 +557,8 @@ function RegisterForm({ register, loading }) {
       <input value={form.phone} onChange={(event) => setForm({ ...form, phone: event.target.value })} placeholder="전화번호" />
       <div className="notice">비밀번호는 영어 4자리 + 숫자 4자리입니다. 예: abcd1234</div>
       <div className="two">
-        <input type="password" value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} placeholder="비밀번호" />
-        <input type="password" value={form.passwordConfirm} onChange={(event) => setForm({ ...form, passwordConfirm: event.target.value })} placeholder="비밀번호 확인" />
+        <PasswordField label="비밀번호" value={form.password} onChange={(value) => setForm({ ...form, password: value })} placeholder="비밀번호" />
+        <PasswordField label="비밀번호 확인" value={form.passwordConfirm} onChange={(value) => setForm({ ...form, passwordConfirm: value })} placeholder="비밀번호 확인" />
       </div>
       <button className="primary" disabled={loading} type="submit"><UserPlus size={17} /> 가입 신청</button>
     </form>
@@ -939,9 +974,29 @@ async function fbPatch(path, value) {
   if (!response.ok) throw new Error(`PATCH ${path} failed`);
 }
 
+async function fbPut(path, value) {
+  const response = await fetch(`${DB}/${path}.json`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(value),
+  });
+  if (!response.ok) throw new Error(`PUT ${path} failed (${response.status})`);
+}
+
 async function fbDelete(path) {
   const response = await fetch(`${DB}/${path}.json`, { method: "DELETE" });
   if (!response.ok) throw new Error(`DELETE ${path} failed`);
+}
+
+function firebaseErrorText(err, action) {
+  const text = String(err?.message || err || "");
+  if (text.includes("404")) {
+    return `${action}을 저장하지 못했습니다. Firebase Realtime Database 주소가 맞는지 확인해주세요.`;
+  }
+  if (text.includes("401") || text.includes("403") || text.toLowerCase().includes("permission")) {
+    return `${action}을 저장하지 못했습니다. Firebase Realtime Database 읽기/쓰기 규칙을 확인해주세요.`;
+  }
+  return `${action}을 저장하지 못했습니다. 잠시 후 다시 시도해주세요.`;
 }
 
 function readLocalData() {
