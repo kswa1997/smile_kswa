@@ -37,6 +37,7 @@ const ADMIN_ID = "kswa1997";
 const ADMIN_PW = "love1004";
 const REVIEW_MILEAGE = 30000;
 const MAX_MILEAGE = 1200000;
+const MIN_USE_MILEAGE = 100000;
 const PASSWORD_RULE = /^[A-Za-z]{4}\d{4}$/;
 
 const STORAGE = {
@@ -52,6 +53,7 @@ const EMPTY_DATA = {
   messages: [],
   messageReads: [],
   pwRequests: [],
+  usageRequests: [],
   withdrawals: [],
 };
 
@@ -90,10 +92,15 @@ function App() {
     () => data.messages.filter((item) => item.recipientId === "admin").sort(sortNewest),
     [data.messages],
   );
+  const userSentAdminMessages = useMemo(
+    () => (!isAdmin && sessionUser?.id ? data.messages.filter((item) => item.senderId === sessionUser.id && item.recipientId === "admin").sort(sortNewest) : []),
+    [data.messages, isAdmin, sessionUser?.id],
+  );
   const unreadUserCount = userMessages.filter((item) => !isMessageRead(data.messageReads, sessionUser?.id, item.id)).length;
   const unreadAdminCount = canAdmin ? adminMessages.filter((item) => !isMessageRead(data.messageReads, readerId, item.id)).length : 0;
   const pendingSignupCount = isAdmin ? data.signupRequests.filter((item) => item.status === "pending").length : 0;
   const pendingPwCount = data.pwRequests.filter((item) => item.status === "pending").length;
+  const pendingUsageCount = data.usageRequests.filter((item) => item.status === "pending").length;
 
   async function refreshData({ silent = false } = {}) {
     if (!silent) setLoading(true);
@@ -215,7 +222,7 @@ function App() {
       await fbPut(`signupRequests/${firebaseKey(request.id)}`, cleanFirebase(request));
       updateData({ ...remote, signupRequests: [request, ...remote.signupRequests] });
       setAuthMode("login");
-      setMessage("가입신청이 정상적으로 접수되었습니다. 관리자에게 가입을 요청했음.");
+      setMessage("가입신청이 정상적으로 접수되었습니다. 관리자에게 가입을 요청했습니다.");
     } catch (err) {
       console.error(err);
       setError(firebaseErrorText(err, "가입신청"));
@@ -367,6 +374,123 @@ function App() {
     updateData({ ...dataRef.current, mileageRecords: dataRef.current.mileageRecords.filter((item) => item.id !== record.id) });
   }
 
+  async function submitUsageRequest(form) {
+    clearAlerts();
+    if (isAdmin || !sessionUser?.id) return false;
+    const amount = Number(String(form.amount || "").replace(/\D/g, ""));
+    if (!Number.isFinite(amount) || amount < MIN_USE_MILEAGE) {
+      setError("마일리지는 10만 마일리지부터 사용이 가능합니다.");
+      return false;
+    }
+    const summary = mileageSummary(sessionUser.id, dataRef.current.mileageRecords);
+    if (amount > summary.balance) {
+      setError("현재 보유 마일리지보다 큰 금액은 요청할 수 없습니다.");
+      return false;
+    }
+    if (!form.volume.trim() || !form.issue.trim()) {
+      setError("사용할 논문의 권과 호수를 입력해주세요.");
+      return false;
+    }
+    setLoading(true);
+    try {
+      const item = {
+        id: makeId("usage"),
+        memberId: sessionUser.id,
+        memberName: sessionUser.name,
+        memberAffiliation: sessionUser.affiliation,
+        memberPhone: sessionUser.phone,
+        amount,
+        volume: form.volume.trim(),
+        issue: form.issue.trim(),
+        note: form.note.trim(),
+        status: "pending",
+        createdAt: now(),
+      };
+      await fbPut(`usageRequests/${firebaseKey(item.id)}`, cleanFirebase(item));
+      updateData({ ...dataRef.current, usageRequests: [item, ...dataRef.current.usageRequests] });
+      setMessage("마일리지 사용 요청이 관리자에게 전달되었습니다.");
+      return true;
+    } catch (err) {
+      console.error(err);
+      setError(firebaseErrorText(err, "마일리지 사용 요청"));
+      return false;
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function approveUsageRequest(req) {
+    if (!canAdmin || req.status !== "pending") return;
+    clearAlerts();
+    setLoading(true);
+    try {
+      const member = dataRef.current.members.find((item) => item.id === req.memberId);
+      if (!member) throw new Error("회원 정보를 찾을 수 없습니다.");
+      const summary = mileageSummary(member.id, dataRef.current.mileageRecords);
+      if (Number(req.amount || 0) > summary.balance) {
+        throw new Error("현재 잔여 마일리지보다 큰 요청입니다.");
+      }
+      const approved = {
+        ...req,
+        status: "approved",
+        reviewedAt: now(),
+        reviewedBy: isAdmin ? "관리자" : `${sessionUser.name} 부관리자`,
+      };
+      const record = {
+        id: makeId("mileage"),
+        memberId: member.id,
+        memberName: member.name,
+        memberAffiliation: member.affiliation,
+        memberPhone: member.phone,
+        type: "use",
+        amount: Number(req.amount || 0),
+        volume: req.volume || "",
+        issue: req.issue || "",
+        note: req.note ? `사용 요청 승인: ${req.note}` : "사용 요청 승인",
+        relatedUsageRequestId: req.id,
+        updatedAt: now(),
+        createdAt: now(),
+        editorId: isAdmin ? "admin" : sessionUser.id,
+        editorName: isAdmin ? "관리자" : sessionUser.name,
+      };
+      await fbPatch("usageRequests", { [firebaseRecordKey(req, req.id)]: cleanFirebase(approved) });
+      await fbPatch("mileageRecords", { [firebaseKey(record.id)]: cleanFirebase(record) });
+      updateData({
+        ...dataRef.current,
+        usageRequests: upsertById(dataRef.current.usageRequests, approved).sort(sortNewest),
+        mileageRecords: upsertById(dataRef.current.mileageRecords, record).sort(sortNewest),
+      });
+      setMessage("마일리지 사용 요청을 승인하고 사용 기록을 등록했습니다.");
+    } catch (err) {
+      console.error(err);
+      setError(err?.status ? firebaseErrorText(err, "마일리지 사용 요청 승인") : err?.message || "마일리지 사용 요청 승인 중 오류가 발생했습니다.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function rejectUsageRequest(req) {
+    if (!canAdmin || req.status !== "pending") return;
+    clearAlerts();
+    setLoading(true);
+    try {
+      const rejected = {
+        ...req,
+        status: "rejected",
+        reviewedAt: now(),
+        reviewedBy: isAdmin ? "관리자" : `${sessionUser.name} 부관리자`,
+      };
+      await fbPatch("usageRequests", { [firebaseRecordKey(req, req.id)]: cleanFirebase(rejected) });
+      updateData({ ...dataRef.current, usageRequests: upsertById(dataRef.current.usageRequests, rejected).sort(sortNewest) });
+      setMessage("마일리지 사용 요청을 거부했습니다.");
+    } catch (err) {
+      console.error(err);
+      setError(firebaseErrorText(err, "마일리지 사용 요청 거부"));
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function sendMessage(form) {
     if (!canAdmin || !form.content.trim()) return;
     const recipient = form.recipientId === "all" ? null : dataRef.current.members.find((item) => item.id === form.recipientId);
@@ -384,6 +508,35 @@ function App() {
     };
     await fbPatch("messages", { [firebaseKey(item.id)]: cleanFirebase(item) });
     updateData({ ...dataRef.current, messages: [item, ...dataRef.current.messages] });
+  }
+
+  async function sendUserMessageToAdmin(form) {
+    clearAlerts();
+    if (isAdmin || !sessionUser?.id || !form.content.trim()) return;
+    setLoading(true);
+    try {
+      const item = {
+        id: makeId("message"),
+        recipientId: "admin",
+        recipientName: "관리자",
+        scope: "memberToAdmin",
+        title: form.title.trim() || "관리자에게 보내는 쪽지",
+        content: form.content.trim(),
+        senderId: sessionUser.id,
+        senderName: sessionUser.name,
+        createdAt: now(),
+      };
+      await fbPatch("messages", { [firebaseKey(item.id)]: cleanFirebase(item) });
+      updateData({ ...dataRef.current, messages: [item, ...dataRef.current.messages] });
+      setMessage("관리자에게 쪽지를 보냈습니다.");
+      return true;
+    } catch (err) {
+      console.error(err);
+      setError(firebaseErrorText(err, "쪽지 발송"));
+      return false;
+    } finally {
+      setLoading(false);
+    }
   }
 
   async function markRead(message) {
@@ -469,9 +622,9 @@ function App() {
         </button>
         <nav>
           <button className={page === "home" ? "active" : ""} type="button" onClick={() => setPage("home")}><BarChart3 size={17} /> 홈</button>
-          <button className={[page === "messages" ? "active" : "", unreadUserCount ? "has-unread" : ""].filter(Boolean).join(" ")} type="button" onClick={() => setPage("messages")}><Mail size={17} /> 쪽지함{unreadUserCount ? ` ${unreadUserCount}` : ""}</button>
-          {canAdmin && <button className={[page === "adminMessages" ? "active" : "", unreadAdminCount ? "has-unread" : ""].filter(Boolean).join(" ")} type="button" onClick={() => setPage("adminMessages")}><Mail size={17} /> 관리자쪽지{unreadAdminCount ? ` ${unreadAdminCount}` : ""}</button>}
-          {canAdmin && <button className={page === "admin" ? "active" : ""} type="button" onClick={() => setPage("admin")}><ShieldCheck size={17} /> 관리자{pendingSignupCount + pendingPwCount || ""}</button>}
+          <button className={[page === "messages" ? "active" : "", unreadUserCount ? "has-unread" : ""].filter(Boolean).join(" ")} type="button" onClick={() => setPage("messages")}><Mail size={17} /> 쪽지함<CountBadge count={unreadUserCount} /></button>
+          {canAdmin && <button className={[page === "adminMessages" ? "active" : "", unreadAdminCount ? "has-unread" : ""].filter(Boolean).join(" ")} type="button" onClick={() => setPage("adminMessages")}><Mail size={17} /> 관리자쪽지<CountBadge count={unreadAdminCount} /></button>}
+          {canAdmin && <button className={page === "admin" ? "active" : ""} type="button" onClick={() => setPage("admin")}><ShieldCheck size={17} /> 관리자<CountBadge count={pendingSignupCount + pendingPwCount + pendingUsageCount} /></button>}
         </nav>
         <div className="session">
           <span>{isAdmin ? <><Crown className="admin-crown" size={24} /> 관리자</> : <>{sessionUser?.name}{isSubAdmin && <small><Crown size={13} /> 부관리자</small>}</>}</span>
@@ -481,8 +634,8 @@ function App() {
 
       {(message || error) && <div className={error ? "alert error" : "alert"}>{error || message}</div>}
 
-      {page === "home" && <HomePage user={sessionUser} data={data} isAdmin={isAdmin} canAdmin={canAdmin} refresh={() => refreshData()} loading={loading} />}
-      {page === "messages" && !isAdmin && <MessagesPage messages={userMessages} reads={data.messageReads} user={sessionUser} markRead={markRead} />}
+      {page === "home" && <HomePage user={sessionUser} data={data} isAdmin={isAdmin} canAdmin={canAdmin} refresh={() => refreshData()} loading={loading} submitUsageRequest={submitUsageRequest} />}
+      {page === "messages" && !isAdmin && <MessagesPage messages={userMessages} sentMessages={userSentAdminMessages} reads={data.messageReads} user={sessionUser} markRead={markRead} sendUserMessageToAdmin={sendUserMessageToAdmin} loading={loading} />}
       {page === "adminMessages" && canAdmin && <AdminMessages messages={adminMessages} sent={data.messages.filter((item) => item.senderId === "admin" || item.senderId === sessionUser?.id)} reads={data.messageReads} readerId={readerId} markRead={markAdminRead} deleteMessage={deleteMessage} />}
       {page === "admin" && canAdmin && (
         <AdminPage
@@ -498,6 +651,8 @@ function App() {
           forceWithdraw={forceWithdraw}
           saveMileage={saveMileage}
           deleteMileage={deleteMileage}
+          approveUsageRequest={approveUsageRequest}
+          rejectUsageRequest={rejectUsageRequest}
           sendMessage={sendMessage}
           resolvePwRequest={resolvePwRequest}
           exportExcel={exportExcel}
@@ -528,6 +683,10 @@ function AuthScreen({ mode, setMode, login, register, submitPwRequest, loading, 
       </section>
     </main>
   );
+}
+
+function CountBadge({ count }) {
+  return count > 0 ? <span className="count-badge">{count}</span> : null;
 }
 
 function LoginForm({ login, loading }) {
@@ -585,10 +744,12 @@ function PwRequestForm({ submitPwRequest, loading }) {
   );
 }
 
-function HomePage({ user, data, isAdmin, canAdmin, refresh, loading }) {
+function HomePage({ user, data, isAdmin, canAdmin, refresh, loading, submitUsageRequest }) {
+  const [section, setSection] = useState("mileage");
   const member = isAdmin ? null : user;
   const records = member ? data.mileageRecords.filter((item) => item.memberId === member.id).sort(sortNewest) : [];
   const summary = member ? mileageSummary(member.id, data.mileageRecords) : totalMileageSummary(data.mileageRecords);
+  const usageRequests = member ? data.usageRequests.filter((item) => item.memberId === member.id).sort(sortNewest) : [];
   return (
     <div className="stack">
       <section className="hero">
@@ -599,41 +760,155 @@ function HomePage({ user, data, isAdmin, canAdmin, refresh, loading }) {
           <strong>한국사회복지행정학 심사 Mileage</strong>
         </div>
       </section>
-      <div className="quick-grid">
-        <InfoTile tone="mint" title="심사 마일리지" icon={<FileSpreadsheet />} />
-        <InfoTile tone="blue" title="논문 심사 기록" icon={<Edit3 />} />
-        <InfoTile tone="peach" title="게재료 대체 사용" icon={<CheckCircle2 />} />
-        <InfoTile tone="green" title="회원 마일리지 확인" icon={<Users />} />
-      </div>
-      <section className="panel">
-        <div className="toolbar slim">
-          <h2>{isAdmin ? "전체 마일리지 현황" : `${member.name}님의 마일리지`}</h2>
-          <button type="button" onClick={refresh}><RefreshCw size={16} /> {loading ? "불러오는 중" : "새로고침"}</button>
-        </div>
-        <div className="notice">최대 120만 마일리지까지 적립할 수 있음.</div>
-        <div className="metrics">
-          <Metric label="적립 마일리지" value={won(summary.earned)} />
-          <Metric label="사용 마일리지" value={won(summary.used)} />
-          <Metric label="현재 마일리지" value={won(summary.balance)} />
-        </div>
-      </section>
       {!isAdmin && (
+        <div className="quick-grid user-quick-grid">
+          <InfoTile active={section === "mileage"} tone="mint" title="심사 마일리지" icon={<FileSpreadsheet />} onClick={() => setSection("mileage")} />
+          <InfoTile active={section === "use"} tone="peach" title="게재료 대체 사용" icon={<CheckCircle2 />} onClick={() => setSection("use")} />
+          <InfoTile active={section === "summary"} tone="green" title="회원 마일리지" icon={<Users />} onClick={() => setSection("summary")} />
+        </div>
+      )}
+      {isAdmin && (
         <section className="panel">
-          <h2><BarChart3 size={19} /> 내 기록</h2>
-          <RecordList records={records} />
+          <div className="toolbar slim">
+            <h2>전체 마일리지 현황</h2>
+            <button type="button" onClick={refresh}><RefreshCw size={16} /> {loading ? "불러오는 중" : "새로고침"}</button>
+          </div>
+          <div className="notice">최대 120만 마일리지까지 적립할 수 있음.</div>
+          <div className="metrics">
+            <Metric label="적립 마일리지" value={won(summary.earned)} />
+            <Metric label="사용 마일리지" value={won(summary.used)} />
+            <Metric label="현재 마일리지" value={won(summary.balance)} />
+          </div>
         </section>
       )}
+      {!isAdmin && section === "mileage" && <MileageDetail member={member} summary={summary} records={records} refresh={refresh} loading={loading} />}
+      {!isAdmin && section === "use" && <UsageRequestPanel summary={summary} requests={usageRequests} submitUsageRequest={submitUsageRequest} loading={loading} />}
+      {!isAdmin && section === "summary" && <MemberMileageSummary member={member} summary={summary} records={records} requests={usageRequests} refresh={refresh} loading={loading} />}
       {canAdmin && <AdminSummary data={data} />}
     </div>
   );
 }
 
-function InfoTile({ tone, title, icon }) {
+function InfoTile({ tone, title, icon, active, onClick }) {
   return (
-    <article className={`info-tile ${tone}`}>
+    <button className={`info-tile ${tone}${active ? " active" : ""}`} type="button" onClick={onClick}>
       {icon}
       <strong>{title}</strong>
-    </article>
+    </button>
+  );
+}
+
+function MileageDetail({ member, summary, records, refresh, loading }) {
+  const reviewRecords = records.filter((record) => record.type === "earn");
+  return (
+    <section className="panel">
+      <div className="toolbar slim">
+        <h2><FileSpreadsheet size={19} /> {member.name}님의 심사 마일리지</h2>
+        <button type="button" onClick={refresh}><RefreshCw size={16} /> {loading ? "불러오는 중" : "새로고침"}</button>
+      </div>
+      <div className="notice">최대 120만 마일리지까지 적립할 수 있음.</div>
+      <div className="metrics">
+        <Metric label="적립 마일리지" value={won(summary.earned)} />
+        <Metric label="사용 마일리지" value={won(summary.used)} />
+        <Metric label="차감 마일리지" value={won(summary.deducted)} />
+        <Metric label="현재 마일리지" value={won(summary.balance)} />
+      </div>
+      <div className="detail-grid">
+        <div>
+          <h3>마일리지 기록</h3>
+          <RecordList records={records} />
+        </div>
+        <div>
+          <h3>논문 심사기록</h3>
+          <ReviewRecordList records={reviewRecords} />
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function ReviewRecordList({ records }) {
+  if (records.length === 0) return <p className="empty">논문 심사기록이 없습니다.</p>;
+  return (
+    <div className="cards">
+      {records.map((record) => (
+        <article className="post" key={record.id}>
+          <strong>{record.volume || "-"}권 {record.issue || "-"}호</strong>
+          <p>적립 {won(record.amount)} 마일리지</p>
+          {record.note && <p>{record.note}</p>}
+          <small>{formatDateTime(record.createdAt)} · {record.editorName}</small>
+        </article>
+      ))}
+    </div>
+  );
+}
+
+function UsageRequestPanel({ summary, requests, submitUsageRequest, loading }) {
+  const [form, setForm] = useState({ amount: "", volume: "", issue: "", note: "" });
+  async function submit(event) {
+    event.preventDefault();
+    const ok = await submitUsageRequest(form);
+    if (ok) setForm({ amount: "", volume: "", issue: "", note: "" });
+  }
+  return (
+    <section className="panel">
+      <h2><CheckCircle2 size={19} /> 게재료 대체 사용 요청</h2>
+      <div className="notice">마일리지는 10만 마일리지부터 사용이 가능합니다. 현재 사용 가능 마일리지: {won(summary.balance)}</div>
+      <form className="form" onSubmit={submit}>
+        <div className="three">
+          <input value={form.amount} onChange={(event) => setForm({ ...form, amount: event.target.value.replace(/\D/g, "") })} placeholder="사용 마일리지" />
+          <input value={form.volume} onChange={(event) => setForm({ ...form, volume: event.target.value })} placeholder="권 예: 10" />
+          <input value={form.issue} onChange={(event) => setForm({ ...form, issue: event.target.value })} placeholder="호 예: 3" />
+        </div>
+        <textarea value={form.note} onChange={(event) => setForm({ ...form, note: event.target.value })} placeholder="관리자에게 전달할 사용 요청 내용" />
+        <button className="primary" disabled={loading} type="submit">사용 요청</button>
+      </form>
+      <h3>내 사용 요청 내역</h3>
+      <UsageRequestList requests={requests} />
+    </section>
+  );
+}
+
+function UsageRequestList({ requests, showMember = false, actions }) {
+  if (requests.length === 0) return <p className="empty">마일리지 사용 요청이 없습니다.</p>;
+  return (
+    <div className="cards">
+      {requests.map((request) => (
+        <article className="post member-row" key={request.id}>
+          <div>
+            <strong>{showMember ? `${request.memberName} · ` : ""}{won(request.amount)} 마일리지 · {statusText(request.status)}</strong>
+            <p>{request.volume || "-"}권 {request.issue || "-"}호</p>
+            {showMember && <p>{request.memberAffiliation} · {request.memberPhone}</p>}
+            {request.note && <p>{request.note}</p>}
+            <small>{formatDateTime(request.createdAt)}{request.reviewedAt ? ` · 처리 ${formatDateTime(request.reviewedAt)}` : ""}</small>
+          </div>
+          {actions && request.status === "pending" && <span className="post-actions">{actions(request)}</span>}
+        </article>
+      ))}
+    </div>
+  );
+}
+
+function MemberMileageSummary({ member, summary, records, requests, refresh, loading }) {
+  return (
+    <section className="panel">
+      <div className="toolbar slim">
+        <h2><Users size={19} /> {member.name}님의 회원 마일리지</h2>
+        <button type="button" onClick={refresh}><RefreshCw size={16} /> {loading ? "불러오는 중" : "새로고침"}</button>
+      </div>
+      <div className="metrics">
+        <Metric label="총 적립" value={won(summary.earned)} />
+        <Metric label="총 사용" value={won(summary.used)} />
+        <Metric label="총 차감" value={won(summary.deducted)} />
+        <Metric label="현재 잔여" value={won(summary.balance)} />
+      </div>
+      <div className="metrics">
+        <Metric label="전체 기록" value={`${records.length}건`} />
+        <Metric label="심사 기록" value={`${records.filter((record) => record.type === "earn").length}건`} />
+        <Metric label="사용 요청" value={`${requests.length}건`} />
+        <Metric label="승인 사용" value={`${requests.filter((request) => request.status === "approved").length}건`} />
+      </div>
+    </section>
   );
 }
 
@@ -669,6 +944,7 @@ function AdminSummary({ data }) {
       <div className="metrics">
         <Metric label="회원" value={`${data.members.length}명`} />
         <Metric label="가입 대기" value={`${data.signupRequests.filter((item) => item.status === "pending").length}건`} />
+        <Metric label="사용 요청" value={`${data.usageRequests.filter((item) => item.status === "pending").length}건`} />
         <Metric label="비번 요청" value={`${data.pwRequests.filter((item) => item.status === "pending").length}건`} />
         <Metric label="전체 잔여" value={won(total.balance)} />
       </div>
@@ -676,42 +952,77 @@ function AdminSummary({ data }) {
   );
 }
 
-function MessagesPage({ messages, reads, user, markRead }) {
+function MessagesPage({ messages, sentMessages, reads, user, markRead, sendUserMessageToAdmin, loading }) {
+  const [form, setForm] = useState({ title: "", content: "" });
+  const unreadCount = messages.filter((message) => !isMessageRead(reads, user?.id, message.id)).length;
+  async function submit(event) {
+    event.preventDefault();
+    const ok = await sendUserMessageToAdmin(form);
+    if (ok) setForm({ title: "", content: "" });
+  }
   return (
-    <section className="panel">
-      <h2><Mail size={19} /> 쪽지함</h2>
-      <div className="cards">
-        {messages.length === 0 ? <p className="empty">쪽지가 없습니다.</p> : messages.map((message) => {
-          const unread = !isMessageRead(reads, user?.id, message.id);
-          return (
-            <article className={unread ? "post unread" : "post"} key={message.id} role="button" tabIndex={0} onClick={() => markRead(message)}>
+    <div className="stack">
+      <section className="panel">
+        <h2><Mail size={19} /> 관리자에게 쪽지 보내기</h2>
+        <form className="form" onSubmit={submit}>
+          <input value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} placeholder="쪽지 제목" />
+          <textarea value={form.content} onChange={(event) => setForm({ ...form, content: event.target.value })} placeholder="관리자에게 보낼 쪽지 내용" />
+          <div className="actions centered-actions">
+            <button className="primary" disabled={loading || !form.content.trim()} type="submit">쪽지 보내기</button>
+          </div>
+        </form>
+      </section>
+      <section className="panel">
+        <h2><Mail size={19} /> 쪽지함 <CountBadge count={unreadCount} /></h2>
+        <div className="cards">
+          {messages.length === 0 ? <p className="empty">쪽지가 없습니다.</p> : messages.map((message) => {
+            const unread = !isMessageRead(reads, user?.id, message.id);
+            return (
+              <article className={unread ? "post unread" : "post"} key={message.id} role="button" tabIndex={0} onClick={() => markRead(message)}>
+                <div className="post-head">
+                  <span className="pill">{message.scope === "all" ? "전체" : "개별"}</span>
+                  {unread && <span className="pill pink">읽지 않음</span>}
+                </div>
+                <strong>{message.title}</strong>
+                <p>{message.content}</p>
+                <small>{message.senderName} · {formatDateTime(message.createdAt)}</small>
+              </article>
+            );
+          })}
+        </div>
+      </section>
+      <section className="panel">
+        <h2><Mail size={19} /> 보낸 쪽지</h2>
+        <div className="cards">
+          {sentMessages.length === 0 ? <p className="empty">관리자에게 보낸 쪽지가 없습니다.</p> : sentMessages.map((message) => (
+            <article className="post" key={message.id}>
               <div className="post-head">
-                <span className="pill">{message.scope === "all" ? "전체" : "개별"}</span>
-                {unread && <span className="pill pink">읽지 않음</span>}
+                <span className="pill">관리자</span>
               </div>
               <strong>{message.title}</strong>
               <p>{message.content}</p>
-              <small>{message.senderName} · {formatDateTime(message.createdAt)}</small>
+              <small>{formatDateTime(message.createdAt)}</small>
             </article>
-          );
-        })}
-      </div>
-    </section>
+          ))}
+        </div>
+      </section>
+    </div>
   );
 }
 
 function AdminMessages({ messages, sent, reads, readerId, markRead, deleteMessage }) {
+  const unreadCount = messages.filter((message) => !isMessageRead(reads, readerId, message.id)).length;
   return (
     <div className="stack">
       <section className="panel">
-        <h2><Bell size={19} /> 관리자 수신 쪽지</h2>
+        <h2><Bell size={19} /> 관리자 수신 쪽지 <CountBadge count={unreadCount} /></h2>
         <div className="cards">
           {messages.length === 0 ? <p className="empty">수신 쪽지가 없습니다.</p> : messages.map((message) => {
             const unread = !isMessageRead(reads, readerId, message.id);
             return (
               <article className={unread ? "post unread" : "post"} key={message.id} onClick={() => markRead(message)}>
                 <div className="post-head">
-                  <span className="pill pink">{message.scope === "pwRequest" ? "비번 요청" : "수신"}</span>
+                  <span className="pill pink">{message.scope === "pwRequest" ? "비번 요청" : message.scope === "memberToAdmin" ? "회원 쪽지" : "수신"}</span>
                   {unread && <span className="pill">읽지 않음</span>}
                 </div>
                 <strong>{message.title}</strong>
@@ -746,6 +1057,9 @@ function AdminMessages({ messages, sent, reads, readerId, markRead, deleteMessag
 
 function AdminPage(props) {
   const { data, tab, setTab, isAdmin, loading, exportExcel, refresh } = props;
+  const pendingSignupCount = data.signupRequests.filter((item) => item.status === "pending").length;
+  const pendingUsageCount = data.usageRequests.filter((item) => item.status === "pending").length;
+  const pendingPwCount = data.pwRequests.filter((item) => item.status === "pending").length;
   return (
     <div className="stack">
       <section className="toolbar">
@@ -758,13 +1072,15 @@ function AdminPage(props) {
       <div className="tabs">
         <button className={tab === "mileage" ? "active" : ""} type="button" onClick={() => setTab("mileage")}>마일리지</button>
         <button className={tab === "members" ? "active" : ""} type="button" onClick={() => setTab("members")}>회원</button>
-        {isAdmin && <button className={tab === "signup" ? "active" : ""} type="button" onClick={() => setTab("signup")}>가입 승인</button>}
+        {isAdmin && <button className={tab === "signup" ? "active" : ""} type="button" onClick={() => setTab("signup")}>가입 승인<CountBadge count={pendingSignupCount} /></button>}
+        <button className={tab === "usage" ? "active" : ""} type="button" onClick={() => setTab("usage")}>사용 요청<CountBadge count={pendingUsageCount} /></button>
         <button className={tab === "messages" ? "active" : ""} type="button" onClick={() => setTab("messages")}>쪽지 발송</button>
-        <button className={tab === "pw" ? "active" : ""} type="button" onClick={() => setTab("pw")}>비번 요청</button>
+        <button className={tab === "pw" ? "active" : ""} type="button" onClick={() => setTab("pw")}>비번 요청<CountBadge count={pendingPwCount} /></button>
       </div>
       {tab === "mileage" && <MileageAdmin {...props} />}
       {tab === "members" && <MembersAdmin {...props} />}
       {tab === "signup" && isAdmin && <SignupAdmin {...props} />}
+      {tab === "usage" && <UsageRequestsAdmin {...props} />}
       {tab === "messages" && <MessageComposer {...props} />}
       {tab === "pw" && <PwAdmin {...props} />}
       <section className="panel muted-panel">
@@ -819,9 +1135,9 @@ function MileageAdmin({ data, saveMileage, deleteMileage }) {
           <input disabled={form.type === "earn"} value={form.type === "earn" ? REVIEW_MILEAGE : form.amount} onChange={(event) => setForm({ ...form, amount: event.target.value.replace(/\D/g, "") })} placeholder="마일리지" />
         </div>
         <textarea value={form.note} onChange={(event) => setForm({ ...form, note: event.target.value })} placeholder="메모" />
-        <div className="actions">
+        <div className="actions centered-actions">
           {editing && <button type="button" onClick={reset}>취소</button>}
-          <button className="primary" type="submit"><Save size={16} /> {editing ? "수정 저장" : "기록 저장"}</button>
+          <button className="primary" type="submit"><Save size={16} /> {editing ? "수정 저장" : "마일리지 적립"}</button>
         </div>
       </form>
       <div className="cards">
@@ -899,6 +1215,26 @@ function SignupAdmin({ data, approveSignup, rejectSignup }) {
   );
 }
 
+function UsageRequestsAdmin({ data, approveUsageRequest, rejectUsageRequest }) {
+  const requests = data.usageRequests.sort(sortNewest);
+  return (
+    <section className="panel">
+      <h2><CheckCircle2 size={19} /> 마일리지 사용 요청</h2>
+      <div className="notice">승인하면 해당 사용 요청이 회원의 마일리지 사용 기록으로 자동 등록됩니다.</div>
+      <UsageRequestList
+        requests={requests}
+        showMember
+        actions={(request) => (
+          <>
+            <button className="primary" type="button" onClick={() => approveUsageRequest(request)}>승인</button>
+            <button type="button" onClick={() => rejectUsageRequest(request)}>거부</button>
+          </>
+        )}
+      />
+    </section>
+  );
+}
+
 function MessageComposer({ data, sendMessage }) {
   const [form, setForm] = useState({ recipientId: "all", title: "", content: "" });
   return (
@@ -946,13 +1282,14 @@ function PwAdmin({ data, resolvePwRequest }) {
 }
 
 async function fetchRemoteData() {
-  const [members, signupRequests, mileageRecords, messages, messageReads, pwRequests, withdrawals] = await Promise.all([
+  const [members, signupRequests, mileageRecords, messages, messageReads, pwRequests, usageRequests, withdrawals] = await Promise.all([
     fbGet("members"),
     fbGet("signupRequests"),
     fbGet("mileageRecords"),
     fbGet("messages"),
     fbGet("messageReads"),
     fbGet("pwRequests"),
+    fbGet("usageRequests"),
     fbGet("withdrawals"),
   ]);
   return {
@@ -962,6 +1299,7 @@ async function fetchRemoteData() {
     messages: toArray(messages).sort(sortNewest),
     messageReads: toArray(messageReads, "key"),
     pwRequests: toArray(pwRequests).sort(sortNewest),
+    usageRequests: toArray(usageRequests).sort(sortNewest),
     withdrawals: toArray(withdrawals).sort(sortNewest),
   };
 }
@@ -1195,6 +1533,7 @@ function downloadExcel(data) {
   const sheets = [
     { name: "회원", columns: ["이름", "소속", "전화번호", "권한", "비밀번호", "가입일"], rows: data.members.map((m) => [m.name, m.affiliation, m.phone, isSubAdminMember(m) ? "부관리자" : "회원", m.password, formatDateTime(m.joinedAt)]) },
     { name: "마일리지", columns: ["회원", "소속", "전화번호", "구분", "금액", "권", "호", "메모", "입력자", "일시"], rows: data.mileageRecords.map((r) => [r.memberName, r.memberAffiliation, r.memberPhone, r.type, r.amount, r.volume, r.issue, r.note, r.editorName, formatDateTime(r.createdAt)]) },
+    { name: "사용요청", columns: ["회원", "소속", "전화번호", "금액", "권", "호", "상태", "메모", "요청일", "처리일", "처리자"], rows: data.usageRequests.map((r) => [r.memberName, r.memberAffiliation, r.memberPhone, r.amount, r.volume, r.issue, r.status, r.note, formatDateTime(r.createdAt), formatDateTime(r.reviewedAt), r.reviewedBy]) },
     { name: "쪽지", columns: ["제목", "내용", "발신", "수신", "구분", "일시"], rows: data.messages.map((m) => [m.title, m.content, m.senderName, m.recipientName, m.scope, formatDateTime(m.createdAt)]) },
     { name: "비번요청", columns: ["이름", "전화번호", "비밀번호", "상태", "메시지", "일시"], rows: data.pwRequests.map((r) => [r.name, r.phone, findPwMember(r, data.members)?.password || r.resolvedPassword, r.status, r.message, formatDateTime(r.createdAt)]) },
     { name: "가입신청", columns: ["이름", "소속", "전화번호", "상태", "신청일"], rows: data.signupRequests.map((r) => [r.name, r.affiliation, r.phone, r.status, formatDateTime(r.requestedAt)]) },

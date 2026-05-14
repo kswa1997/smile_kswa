@@ -165,6 +165,27 @@ button {
   border-color: var(--pink) !important;
 }
 
+.count-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 7px;
+  border-radius: 999px;
+  color: #fff;
+  background: var(--pink);
+  font-size: 12px;
+  font-weight: 900;
+  line-height: 1;
+}
+
+.active .count-badge,
+.primary .count-badge {
+  color: var(--brand-blue);
+  background: #fff;
+}
+
 .session {
   justify-content: flex-end;
   font-weight: 900;
@@ -242,6 +263,20 @@ button {
   font-weight: 900;
 }
 
+.info-tile {
+  border: 1.5px solid transparent;
+  color: inherit;
+}
+
+.info-tile.active {
+  border-color: var(--brand-blue);
+  box-shadow: inset 0 0 0 2px rgba(47, 113, 148, 0.12);
+}
+
+.user-quick-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
 .info-tile svg {
   width: 44px;
   height: 44px;
@@ -272,11 +307,23 @@ button {
 }
 
 .panel h2,
+.panel h3,
 .toolbar h1 {
   display: flex;
   align-items: center;
   gap: 7px;
   margin: 0 0 12px;
+}
+
+.panel h3 {
+  margin-top: 16px;
+  font-size: 17px;
+}
+
+.detail-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
 }
 
 .toolbar.slim {
@@ -398,6 +445,10 @@ textarea {
   flex: 1 1 120px;
 }
 
+.centered-actions {
+  justify-content: center;
+}
+
 .metric {
   align-content: center;
   min-height: 112px;
@@ -492,9 +543,11 @@ textarea {
   }
 
   .quick-grid,
+  .user-quick-grid,
   .metrics,
   .two,
-  .three {
+  .three,
+  .detail-grid {
     grid-template-columns: 1fr;
   }
 
