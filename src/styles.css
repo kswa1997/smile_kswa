@@ -406,6 +406,17 @@ textarea {
   resize: vertical;
 }
 
+.memo-small {
+  min-height: 52px;
+}
+
+.char-count {
+  justify-self: end;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
 .notice,
 .alert {
   padding: 11px 13px;

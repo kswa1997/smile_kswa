@@ -357,6 +357,7 @@ function App() {
       amount,
       volume: form.volume.trim(),
       issue: form.issue.trim(),
+      paperTitle: form.paperTitle.trim(),
       note: form.note.trim(),
       updatedAt: now(),
       createdAt: editingRecord?.createdAt || now(),
@@ -387,10 +388,6 @@ function App() {
       setError("현재 보유 마일리지보다 큰 금액은 요청할 수 없습니다.");
       return false;
     }
-    if (!form.volume.trim() || !form.issue.trim()) {
-      setError("사용할 논문의 권과 호수를 입력해주세요.");
-      return false;
-    }
     setLoading(true);
     try {
       const item = {
@@ -400,8 +397,6 @@ function App() {
         memberAffiliation: sessionUser.affiliation,
         memberPhone: sessionUser.phone,
         amount,
-        volume: form.volume.trim(),
-        issue: form.issue.trim(),
         note: form.note.trim(),
         status: "pending",
         createdAt: now(),
@@ -442,11 +437,12 @@ function App() {
         memberName: member.name,
         memberAffiliation: member.affiliation,
         memberPhone: member.phone,
-        type: "use",
-        amount: Number(req.amount || 0),
-        volume: req.volume || "",
-        issue: req.issue || "",
-        note: req.note ? `사용 요청 승인: ${req.note}` : "사용 요청 승인",
+      type: "use",
+      amount: Number(req.amount || 0),
+      volume: "",
+      issue: "",
+      paperTitle: "",
+      note: req.note ? `사용 요청 승인: ${req.note}` : "사용 요청 승인",
         relatedUsageRequestId: req.id,
         updatedAt: now(),
         createdAt: now(),
@@ -764,7 +760,7 @@ function HomePage({ user, data, isAdmin, canAdmin, refresh, loading, submitUsage
         <div className="quick-grid user-quick-grid">
           <InfoTile active={section === "mileage"} tone="mint" title="심사 마일리지" icon={<FileSpreadsheet />} onClick={() => setSection("mileage")} />
           <InfoTile active={section === "use"} tone="peach" title="게재료 대체 사용" icon={<CheckCircle2 />} onClick={() => setSection("use")} />
-          <InfoTile active={section === "summary"} tone="green" title="회원 마일리지" icon={<Users />} onClick={() => setSection("summary")} />
+          <InfoTile active={section === "summary"} tone="green" title="회원 활동" icon={<Users />} onClick={() => setSection("summary")} />
         </div>
       )}
       {isAdmin && (
@@ -834,6 +830,7 @@ function ReviewRecordList({ records }) {
       {records.map((record) => (
         <article className="post" key={record.id}>
           <strong>{record.volume || "-"}권 {record.issue || "-"}호</strong>
+          {record.paperTitle && <p>논문 제목: {record.paperTitle}</p>}
           <p>적립 {won(record.amount)} 마일리지</p>
           {record.note && <p>{record.note}</p>}
           <small>{formatDateTime(record.createdAt)} · {record.editorName}</small>
@@ -844,23 +841,20 @@ function ReviewRecordList({ records }) {
 }
 
 function UsageRequestPanel({ summary, requests, submitUsageRequest, loading }) {
-  const [form, setForm] = useState({ amount: "", volume: "", issue: "", note: "" });
+  const [form, setForm] = useState({ amount: "", note: "" });
   async function submit(event) {
     event.preventDefault();
     const ok = await submitUsageRequest(form);
-    if (ok) setForm({ amount: "", volume: "", issue: "", note: "" });
+    if (ok) setForm({ amount: "", note: "" });
   }
   return (
     <section className="panel">
       <h2><CheckCircle2 size={19} /> 게재료 대체 사용 요청</h2>
       <div className="notice">마일리지는 10만 마일리지부터 사용이 가능합니다. 현재 사용 가능 마일리지: {won(summary.balance)}</div>
       <form className="form" onSubmit={submit}>
-        <div className="three">
-          <input value={form.amount} onChange={(event) => setForm({ ...form, amount: event.target.value.replace(/\D/g, "") })} placeholder="사용 마일리지" />
-          <input value={form.volume} onChange={(event) => setForm({ ...form, volume: event.target.value })} placeholder="권 예: 10" />
-          <input value={form.issue} onChange={(event) => setForm({ ...form, issue: event.target.value })} placeholder="호 예: 3" />
-        </div>
-        <textarea value={form.note} onChange={(event) => setForm({ ...form, note: event.target.value })} placeholder="관리자에게 전달할 사용 요청 내용" />
+        <input inputMode="numeric" value={form.amount} onChange={(event) => setForm({ ...form, amount: formatMileageInput(event.target.value) })} placeholder="사용 마일리지 예: 120,000" />
+        <textarea maxLength={500} value={form.note} onChange={(event) => setForm({ ...form, note: event.target.value })} placeholder="관리자에게 전달할 사용 요청 내용(사용할 권이나 호수, 혹은 현재 게재를 원하는 논문명을 적어주세요)" />
+        <small className="char-count">{form.note.length}/500자</small>
         <button className="primary" disabled={loading} type="submit">사용 요청</button>
       </form>
       <h3>내 사용 요청 내역</h3>
@@ -877,7 +871,6 @@ function UsageRequestList({ requests, showMember = false, actions }) {
         <article className="post member-row" key={request.id}>
           <div>
             <strong>{showMember ? `${request.memberName} · ` : ""}{won(request.amount)} 마일리지 · {statusText(request.status)}</strong>
-            <p>{request.volume || "-"}권 {request.issue || "-"}호</p>
             {showMember && <p>{request.memberAffiliation} · {request.memberPhone}</p>}
             {request.note && <p>{request.note}</p>}
             <small>{formatDateTime(request.createdAt)}{request.reviewedAt ? ` · 처리 ${formatDateTime(request.reviewedAt)}` : ""}</small>
@@ -893,7 +886,7 @@ function MemberMileageSummary({ member, summary, records, requests, refresh, loa
   return (
     <section className="panel">
       <div className="toolbar slim">
-        <h2><Users size={19} /> {member.name}님의 회원 마일리지</h2>
+        <h2><Users size={19} /> {member.name}님의 회원 활동</h2>
         <button type="button" onClick={refresh}><RefreshCw size={16} /> {loading ? "불러오는 중" : "새로고침"}</button>
       </div>
       <div className="metrics">
@@ -928,6 +921,7 @@ function RecordList({ records }) {
       {records.map((record) => (
         <article className="post" key={record.id}>
           <strong>{recordText(record)}</strong>
+          {record.paperTitle && <p>논문 제목: {record.paperTitle}</p>}
           {record.note && <p>{record.note}</p>}
           <small>{formatDateTime(record.createdAt)} · {record.editorName}</small>
         </article>
@@ -1093,7 +1087,7 @@ function AdminPage(props) {
 
 function MileageAdmin({ data, saveMileage, deleteMileage }) {
   const [editing, setEditing] = useState(null);
-  const [form, setForm] = useState({ memberId: data.members[0]?.id || "", type: "earn", amount: REVIEW_MILEAGE, volume: "", issue: "", note: "" });
+  const [form, setForm] = useState({ memberId: data.members[0]?.id || "", type: "earn", amount: REVIEW_MILEAGE, volume: "", issue: "", paperTitle: "", note: "" });
   const selected = data.members.find((member) => member.id === form.memberId);
   const summary = selected ? mileageSummary(selected.id, data.mileageRecords) : null;
 
@@ -1105,13 +1099,14 @@ function MileageAdmin({ data, saveMileage, deleteMileage }) {
       amount: record.amount,
       volume: record.volume || "",
       issue: record.issue || "",
+      paperTitle: record.paperTitle || "",
       note: record.note || "",
     });
   }
 
   function reset() {
     setEditing(null);
-    setForm({ memberId: data.members[0]?.id || "", type: "earn", amount: REVIEW_MILEAGE, volume: "", issue: "", note: "" });
+    setForm({ memberId: data.members[0]?.id || "", type: "earn", amount: REVIEW_MILEAGE, volume: "", issue: "", paperTitle: "", note: "" });
   }
 
   return (
@@ -1134,7 +1129,9 @@ function MileageAdmin({ data, saveMileage, deleteMileage }) {
           <input value={form.issue} onChange={(event) => setForm({ ...form, issue: event.target.value })} placeholder="호 예: 3" />
           <input disabled={form.type === "earn"} value={form.type === "earn" ? REVIEW_MILEAGE : form.amount} onChange={(event) => setForm({ ...form, amount: event.target.value.replace(/\D/g, "") })} placeholder="마일리지" />
         </div>
-        <textarea value={form.note} onChange={(event) => setForm({ ...form, note: event.target.value })} placeholder="메모" />
+        <input value={form.paperTitle} onChange={(event) => setForm({ ...form, paperTitle: event.target.value })} placeholder="논문 제목" />
+        <textarea className="memo-small" maxLength={500} value={form.note} onChange={(event) => setForm({ ...form, note: event.target.value })} placeholder="메모" />
+        <small className="char-count">{form.note.length}/500자</small>
         <div className="actions centered-actions">
           {editing && <button type="button" onClick={reset}>취소</button>}
           <button className="primary" type="submit"><Save size={16} /> {editing ? "수정 저장" : "마일리지 적립"}</button>
@@ -1144,6 +1141,7 @@ function MileageAdmin({ data, saveMileage, deleteMileage }) {
         {data.mileageRecords.length === 0 ? <p className="empty">마일리지 기록이 없습니다.</p> : data.mileageRecords.map((record) => (
           <article className="post" key={record.id}>
             <strong>{record.memberName} · {recordText(record)}</strong>
+            {record.paperTitle && <p>논문 제목: {record.paperTitle}</p>}
             <p>{record.memberAffiliation} · {record.memberPhone}</p>
             <footer>
               <span>{formatDateTime(record.createdAt)} · {record.editorName}</span>
@@ -1495,6 +1493,11 @@ function won(value) {
   return Number(value || 0).toLocaleString("ko-KR");
 }
 
+function formatMileageInput(value) {
+  const digits = String(value || "").replace(/\D/g, "");
+  return digits ? Number(digits).toLocaleString("ko-KR") : "";
+}
+
 function statusText(status) {
   if (status === "approved") return "승인";
   if (status === "rejected") return "거부";
@@ -1532,8 +1535,8 @@ function formatDateTime(value) {
 function downloadExcel(data) {
   const sheets = [
     { name: "회원", columns: ["이름", "소속", "전화번호", "권한", "비밀번호", "가입일"], rows: data.members.map((m) => [m.name, m.affiliation, m.phone, isSubAdminMember(m) ? "부관리자" : "회원", m.password, formatDateTime(m.joinedAt)]) },
-    { name: "마일리지", columns: ["회원", "소속", "전화번호", "구분", "금액", "권", "호", "메모", "입력자", "일시"], rows: data.mileageRecords.map((r) => [r.memberName, r.memberAffiliation, r.memberPhone, r.type, r.amount, r.volume, r.issue, r.note, r.editorName, formatDateTime(r.createdAt)]) },
-    { name: "사용요청", columns: ["회원", "소속", "전화번호", "금액", "권", "호", "상태", "메모", "요청일", "처리일", "처리자"], rows: data.usageRequests.map((r) => [r.memberName, r.memberAffiliation, r.memberPhone, r.amount, r.volume, r.issue, r.status, r.note, formatDateTime(r.createdAt), formatDateTime(r.reviewedAt), r.reviewedBy]) },
+    { name: "마일리지", columns: ["회원", "소속", "전화번호", "구분", "금액", "권", "호", "논문제목", "메모", "입력자", "일시"], rows: data.mileageRecords.map((r) => [r.memberName, r.memberAffiliation, r.memberPhone, r.type, r.amount, r.volume, r.issue, r.paperTitle, r.note, r.editorName, formatDateTime(r.createdAt)]) },
+    { name: "사용요청", columns: ["회원", "소속", "전화번호", "금액", "상태", "메모", "요청일", "처리일", "처리자"], rows: data.usageRequests.map((r) => [r.memberName, r.memberAffiliation, r.memberPhone, r.amount, r.status, r.note, formatDateTime(r.createdAt), formatDateTime(r.reviewedAt), r.reviewedBy]) },
     { name: "쪽지", columns: ["제목", "내용", "발신", "수신", "구분", "일시"], rows: data.messages.map((m) => [m.title, m.content, m.senderName, m.recipientName, m.scope, formatDateTime(m.createdAt)]) },
     { name: "비번요청", columns: ["이름", "전화번호", "비밀번호", "상태", "메시지", "일시"], rows: data.pwRequests.map((r) => [r.name, r.phone, findPwMember(r, data.members)?.password || r.resolvedPassword, r.status, r.message, formatDateTime(r.createdAt)]) },
     { name: "가입신청", columns: ["이름", "소속", "전화번호", "상태", "신청일"], rows: data.signupRequests.map((r) => [r.name, r.affiliation, r.phone, r.status, formatDateTime(r.requestedAt)]) },
