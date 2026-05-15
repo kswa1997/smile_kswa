@@ -331,10 +331,25 @@ function App() {
     if (!member) throw new Error("심사자를 선택해주세요.");
     const amount = form.type === "earn" ? REVIEW_MILEAGE : Number(form.amount || 0);
     if (!Number.isFinite(amount) || amount <= 0) throw new Error("마일리지 금액을 입력해주세요.");
-    if (!form.paperTitle.trim() || !form.volume.trim() || !form.issue.trim()) {
-      throw new Error("논문 제목과 권, 호수를 모두 입력해야 마일리지를 적립할 수 있습니다.");
+    const volume = form.volume.trim();
+    const issue = form.issue.trim();
+    const paperTitle = form.paperTitle.trim();
+    if (!volume || !issue || !paperTitle) {
+      throw new Error("권, 호, 논문 제목을 모두 기입하세요.");
     }
     const otherRecords = dataRef.current.mileageRecords.filter((item) => item.id !== editingRecord?.id);
+    if (form.type === "earn") {
+      const duplicate = otherRecords.some((record) => (
+        record.type === "earn"
+        && record.memberId === member.id
+        && normalizeVolumeIssue(record.volume) === normalizeVolumeIssue(volume)
+        && normalizeVolumeIssue(record.issue) === normalizeVolumeIssue(issue)
+        && normalizePaperTitle(record.paperTitle) === normalizePaperTitle(paperTitle)
+      ));
+      if (duplicate) {
+        throw new Error("같은 권, 호, 논문 제목으로는 같은 심사자에게 마일리지를 다시 적립할 수 없습니다.");
+      }
+    }
     const currentBalance = mileageSummary(member.id, otherRecords).balance;
     if (form.type === "earn" && currentBalance + amount > MAX_MILEAGE) {
       throw new Error("최대 120만 마일리지까지 적립할 수 있습니다.");
@@ -351,9 +366,9 @@ function App() {
       memberPhone: member.phone,
       type: form.type,
       amount,
-      volume: form.volume.trim(),
-      issue: form.issue.trim(),
-      paperTitle: form.paperTitle.trim(),
+      volume,
+      issue,
+      paperTitle,
       note: form.note.trim(),
       updatedAt: now(),
       createdAt: editingRecord?.createdAt || now(),
@@ -1368,6 +1383,15 @@ function findPwMember(req, members) {
 
 function getAdminPassword(data) {
   return data?.settings?.adminPassword || ADMIN_DEFAULT_PW;
+}
+
+function normalizePaperTitle(value) {
+  return String(value || "").trim().replace(/\s+/g, " ").toLocaleLowerCase("ko-KR");
+}
+
+function normalizeVolumeIssue(value) {
+  const normalized = normalizePaperTitle(value);
+  return /^\d+$/.test(normalized) ? String(Number(normalized)) : normalized;
 }
 
 function mileageSummary(memberId, records) {
