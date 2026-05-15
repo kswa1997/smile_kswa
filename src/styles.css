@@ -83,6 +83,13 @@ button {
   color: var(--brand-blue-dark);
 }
 
+.contact-note {
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 800;
+  line-height: 1.55;
+}
+
 .topbar,
 .toolbar,
 .session,
@@ -370,6 +377,16 @@ textarea {
   background: #fff;
 }
 
+input:disabled {
+  color: var(--muted);
+  background: #f4f8f9;
+}
+
+.profile-panel {
+  max-width: 820px;
+  margin: 0 auto;
+}
+
 .password-field {
   position: relative;
   display: block;
@@ -530,13 +547,8 @@ textarea {
   background: var(--pink);
 }
 
-.empty,
-.muted-panel p {
+.empty {
   color: var(--muted);
-}
-
-.muted-panel {
-  background: #f7fbfa;
 }
 
 @media (max-width: 900px) {

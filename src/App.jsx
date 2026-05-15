@@ -2,7 +2,6 @@ import { useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   BarChart3,
-  Bell,
   CheckCircle2,
   Crown,
   Download,
@@ -12,7 +11,6 @@ import {
   FileSpreadsheet,
   KeyRound,
   LogOut,
-  Mail,
   Plus,
   RefreshCw,
   Save,
@@ -38,7 +36,7 @@ const ADMIN_PW = "love1004";
 const REVIEW_MILEAGE = 30000;
 const MAX_MILEAGE = 1200000;
 const MIN_USE_MILEAGE = 100000;
-const PASSWORD_RULE = /^[A-Za-z]{4}\d{4}$/;
+const PASSWORD_RULE = /^(?=.*[A-Za-z])(?=.*\d)[A-Za-z\d]{8}$/;
 
 const STORAGE = {
   user: "smile_user",
@@ -50,8 +48,6 @@ const EMPTY_DATA = {
   members: [],
   signupRequests: [],
   mileageRecords: [],
-  messages: [],
-  messageReads: [],
   pwRequests: [],
   usageRequests: [],
   withdrawals: [],
@@ -83,21 +79,6 @@ function App() {
 
   const isSubAdmin = !isAdmin && isSubAdminMember(sessionUser);
   const canAdmin = isAdmin || isSubAdmin;
-  const readerId = isAdmin ? "admin" : sessionUser?.id || "";
-  const userMessages = useMemo(
-    () => getVisibleMessages(data.messages, sessionUser, isAdmin),
-    [data.messages, sessionUser, isAdmin],
-  );
-  const adminMessages = useMemo(
-    () => data.messages.filter((item) => item.recipientId === "admin").sort(sortNewest),
-    [data.messages],
-  );
-  const userSentAdminMessages = useMemo(
-    () => (!isAdmin && sessionUser?.id ? data.messages.filter((item) => item.senderId === sessionUser.id && item.recipientId === "admin").sort(sortNewest) : []),
-    [data.messages, isAdmin, sessionUser?.id],
-  );
-  const unreadUserCount = userMessages.filter((item) => !isMessageRead(data.messageReads, sessionUser?.id, item.id)).length;
-  const unreadAdminCount = canAdmin ? adminMessages.filter((item) => !isMessageRead(data.messageReads, readerId, item.id)).length : 0;
   const pendingSignupCount = isAdmin ? data.signupRequests.filter((item) => item.status === "pending").length : 0;
   const pendingPwCount = data.pwRequests.filter((item) => item.status === "pending").length;
   const pendingUsageCount = data.usageRequests.filter((item) => item.status === "pending").length;
@@ -127,7 +108,7 @@ function App() {
   async function login(form) {
     clearAlerts();
     if (!form.name.trim() || !form.password.trim()) {
-      setError("이름과 비밀번호를 입력해주세요. 비밀번호는 영어 4자리 + 숫자 4자리입니다.");
+      setError("이름과 비밀번호를 입력해주세요. 비밀번호는 영어와 숫자를 혼용한 8자리입니다.");
       return;
     }
     if (form.name.trim() === ADMIN_ID && form.password.trim() === ADMIN_PW) {
@@ -144,7 +125,7 @@ function App() {
       return;
     }
     if (!PASSWORD_RULE.test(form.password.trim())) {
-      setError("비밀번호는 영어 4자리 + 숫자 4자리 형식입니다. 예: abcd1234");
+      setError("비밀번호는 영어와 숫자를 혼용한 8자리입니다. 예: a1234567");
       return;
     }
     setLoading(true);
@@ -194,7 +175,7 @@ function App() {
       return;
     }
     if (!PASSWORD_RULE.test(trimmed.password)) {
-      setError("비밀번호는 영어 4자리 + 숫자 4자리 형식입니다. 예: abcd1234");
+      setError("비밀번호는 영어와 숫자를 혼용한 8자리입니다. 예: a1234567");
       return;
     }
     if (trimmed.password !== form.passwordConfirm.trim()) {
@@ -256,13 +237,10 @@ function App() {
         status: "pending",
         createdAt: now(),
       };
-      const adminMessage = buildPwAdminMessage(req, member);
       await fbPatch("pwRequests", { [firebaseKey(req.id)]: cleanFirebase(req) });
-      await fbPatch("messages", { [firebaseKey(adminMessage.id)]: cleanFirebase(adminMessage) });
       updateData({
         ...remote,
         pwRequests: [req, ...remote.pwRequests],
-        messages: [adminMessage, ...remote.messages],
       });
       setAuthMode("login");
       setMessage("비밀번호 요청이 관리자에게 전달되었습니다.");
@@ -487,70 +465,48 @@ function App() {
     }
   }
 
-  async function sendMessage(form) {
-    if (!canAdmin || !form.content.trim()) return;
-    const recipient = form.recipientId === "all" ? null : dataRef.current.members.find((item) => item.id === form.recipientId);
-    if (form.recipientId !== "all" && !recipient) throw new Error("받는 회원을 선택해주세요.");
-    const item = {
-      id: makeId("message"),
-      recipientId: form.recipientId,
-      recipientName: recipient ? memberLabel(recipient) : "전체 회원",
-      scope: form.recipientId === "all" ? "all" : "member",
-      title: form.title.trim() || "Smile of KSWA 공지",
-      content: form.content.trim(),
-      senderId: isAdmin ? "admin" : sessionUser.id,
-      senderName: isAdmin ? "관리자" : `${sessionUser.name} 부관리자`,
-      createdAt: now(),
-    };
-    await fbPatch("messages", { [firebaseKey(item.id)]: cleanFirebase(item) });
-    updateData({ ...dataRef.current, messages: [item, ...dataRef.current.messages] });
-  }
-
-  async function sendUserMessageToAdmin(form) {
+  async function updateProfile(form) {
     clearAlerts();
-    if (isAdmin || !sessionUser?.id || !form.content.trim()) return;
+    if (isAdmin || !sessionUser?.id) return;
+    const affiliation = form.affiliation.trim();
+    const phone = form.phone.trim();
+    const password = form.password.trim();
+    const passwordConfirm = form.passwordConfirm.trim();
+    if (!affiliation || !phone) {
+      setError("소속과 전화번호를 모두 입력해주세요.");
+      return;
+    }
+    if (password || passwordConfirm) {
+      if (!PASSWORD_RULE.test(password)) {
+        setError("새 비밀번호는 영어와 숫자를 혼용한 8자리입니다. 예: a1234567");
+        return;
+      }
+      if (password !== passwordConfirm) {
+        setError("새 비밀번호 확인이 일치하지 않습니다.");
+        return;
+      }
+    }
     setLoading(true);
     try {
-      const item = {
-        id: makeId("message"),
-        recipientId: "admin",
-        recipientName: "관리자",
-        scope: "memberToAdmin",
-        title: form.title.trim() || "관리자에게 보내는 쪽지",
-        content: form.content.trim(),
-        senderId: sessionUser.id,
-        senderName: sessionUser.name,
-        createdAt: now(),
+      const updated = {
+        ...sessionUser,
+        affiliation,
+        phone,
+        password: password || sessionUser.password,
+        updatedAt: now(),
       };
-      await fbPatch("messages", { [firebaseKey(item.id)]: cleanFirebase(item) });
-      updateData({ ...dataRef.current, messages: [item, ...dataRef.current.messages] });
-      setMessage("관리자에게 쪽지를 보냈습니다.");
-      return true;
+      await fbPatch("members", { [firebaseRecordKey(sessionUser, sessionUser.id)]: cleanFirebase(updated) });
+      updateData({ ...dataRef.current, members: upsertById(dataRef.current.members, updated) });
+      setUser(updated);
+      writeStorage(STORAGE.user, updated);
+      setMessage("개인정보가 수정되었습니다.");
+      setPage("home");
     } catch (err) {
       console.error(err);
-      setError(firebaseErrorText(err, "쪽지 발송"));
-      return false;
+      setError(firebaseErrorText(err, "개인정보 수정"));
     } finally {
       setLoading(false);
     }
-  }
-
-  async function markRead(message) {
-    if (!sessionUser?.id || !message?.id) return;
-    const key = `${sessionUser.id}_${message.id}`;
-    if (isMessageRead(dataRef.current.messageReads, sessionUser.id, message.id)) return;
-    const item = { key, memberId: sessionUser.id, messageId: message.id, readAt: now() };
-    await fbPatch("messageReads", { [firebaseKey(key)]: cleanFirebase(item) });
-    updateData({ ...dataRef.current, messageReads: upsertByKey(dataRef.current.messageReads, item, "key") });
-  }
-
-  async function markAdminRead(message) {
-    if (!canAdmin || !readerId || !message?.id) return;
-    const key = `${readerId}_${message.id}`;
-    if (isMessageRead(dataRef.current.messageReads, readerId, message.id)) return;
-    const item = { key, memberId: readerId, messageId: message.id, readAt: now() };
-    await fbPatch("messageReads", { [firebaseKey(key)]: cleanFirebase(item) });
-    updateData({ ...dataRef.current, messageReads: upsertByKey(dataRef.current.messageReads, item, "key") });
   }
 
   async function resolvePwRequest(req) {
@@ -558,12 +514,6 @@ function App() {
     const updated = { ...req, status: "done", resolvedAt: now() };
     await fbPatch("pwRequests", { [firebaseRecordKey(req, req.id)]: cleanFirebase(updated) });
     updateData({ ...dataRef.current, pwRequests: upsertById(dataRef.current.pwRequests, updated) });
-  }
-
-  async function deleteMessage(message) {
-    if (!canAdmin) return;
-    await fbDelete(`messages/${firebaseRecordKey(message, message.id)}`);
-    updateData({ ...dataRef.current, messages: dataRef.current.messages.filter((item) => item.id !== message.id) });
   }
 
   async function exportExcel() {
@@ -581,6 +531,7 @@ function App() {
   }
 
   function logout() {
+    clearAlerts();
     setUser(null);
     setIsAdmin(false);
     writeStorage(STORAGE.user, null);
@@ -618,8 +569,7 @@ function App() {
         </button>
         <nav>
           <button className={page === "home" ? "active" : ""} type="button" onClick={() => setPage("home")}><BarChart3 size={17} /> 홈</button>
-          <button className={[page === "messages" ? "active" : "", unreadUserCount ? "has-unread" : ""].filter(Boolean).join(" ")} type="button" onClick={() => setPage("messages")}><Mail size={17} /> 쪽지함<CountBadge count={unreadUserCount} /></button>
-          {canAdmin && <button className={[page === "adminMessages" ? "active" : "", unreadAdminCount ? "has-unread" : ""].filter(Boolean).join(" ")} type="button" onClick={() => setPage("adminMessages")}><Mail size={17} /> 관리자쪽지<CountBadge count={unreadAdminCount} /></button>}
+          {!isAdmin && <button className={page === "profile" ? "active" : ""} type="button" onClick={() => setPage("profile")}><User size={17} /> 개인정보</button>}
           {canAdmin && <button className={page === "admin" ? "active" : ""} type="button" onClick={() => setPage("admin")}><ShieldCheck size={17} /> 관리자<CountBadge count={pendingSignupCount + pendingPwCount + pendingUsageCount} /></button>}
         </nav>
         <div className="session">
@@ -631,8 +581,7 @@ function App() {
       {(message || error) && <div className={error ? "alert error" : "alert"}>{error || message}</div>}
 
       {page === "home" && <HomePage user={sessionUser} data={data} isAdmin={isAdmin} canAdmin={canAdmin} refresh={() => refreshData()} loading={loading} submitUsageRequest={submitUsageRequest} />}
-      {page === "messages" && !isAdmin && <MessagesPage messages={userMessages} sentMessages={userSentAdminMessages} reads={data.messageReads} user={sessionUser} markRead={markRead} sendUserMessageToAdmin={sendUserMessageToAdmin} loading={loading} />}
-      {page === "adminMessages" && canAdmin && <AdminMessages messages={adminMessages} sent={data.messages.filter((item) => item.senderId === "admin" || item.senderId === sessionUser?.id)} reads={data.messageReads} readerId={readerId} markRead={markAdminRead} deleteMessage={deleteMessage} />}
+      {page === "profile" && !isAdmin && <ProfilePage user={sessionUser} updateProfile={updateProfile} loading={loading} />}
       {page === "admin" && canAdmin && (
         <AdminPage
           data={data}
@@ -649,7 +598,6 @@ function App() {
           deleteMileage={deleteMileage}
           approveUsageRequest={approveUsageRequest}
           rejectUsageRequest={rejectUsageRequest}
-          sendMessage={sendMessage}
           resolvePwRequest={resolvePwRequest}
           exportExcel={exportExcel}
           refresh={() => refreshData()}
@@ -666,7 +614,8 @@ function AuthScreen({ mode, setMode, login, register, submitPwRequest, loading, 
         <img src="/assets/kswa-main.png" alt="한국사회복지행정학회" />
         <h1>Smile of KSWA</h1>
         <p>한국사회복지행정학 심사 Mileage</p>
-        <div className="notice">비밀번호는 <strong>영어 4자리 + 숫자 4자리</strong> 총 8자리입니다. 예: <strong>abcd1234</strong></div>
+        <p className="contact-note">학회 마일리지와 웹 운영에 관한 질문과 요청은 학회(편집간사)에 연락을 주시기를 바랍니다(www.koweladmin.or.kr).</p>
+        <div className="notice">비밀번호는 <strong>영어와 숫자를 혼용한 8자리</strong>입니다. 예: <strong>a1234567</strong></div>
         <div className="tabs">
           <button className={mode === "login" ? "active" : ""} type="button" onClick={() => setMode("login")}>로그인</button>
           <button className={mode === "register" ? "active" : ""} type="button" onClick={() => setMode("register")}>신규 가입</button>
@@ -690,7 +639,7 @@ function LoginForm({ login, loading }) {
   return (
     <form className="form" onSubmit={(event) => { event.preventDefault(); login(form); }}>
       <label>이름 또는 관리자 ID<input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="이름 입력" /></label>
-      <PasswordField label="비밀번호" value={form.password} onChange={(value) => setForm({ ...form, password: value })} placeholder="영어4+숫자4 예: abcd1234" />
+      <PasswordField label="비밀번호" value={form.password} onChange={(value) => setForm({ ...form, password: value })} placeholder="영어+숫자 혼용 8자리 예: a1234567" />
       <button className="primary" disabled={loading} type="submit">로그인</button>
     </form>
   );
@@ -718,7 +667,7 @@ function RegisterForm({ register, loading }) {
       <input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="이름" />
       <input value={form.affiliation} onChange={(event) => setForm({ ...form, affiliation: event.target.value })} placeholder="소속" />
       <input value={form.phone} onChange={(event) => setForm({ ...form, phone: event.target.value })} placeholder="전화번호" />
-      <div className="notice">비밀번호는 영어 4자리 + 숫자 4자리입니다. 예: abcd1234</div>
+      <div className="notice">비밀번호는 영어와 숫자를 혼용한 8자리입니다. 예: a1234567, 1234567b, abcdefg0</div>
       <div className="two">
         <PasswordField label="비밀번호" value={form.password} onChange={(value) => setForm({ ...form, password: value })} placeholder="비밀번호" />
         <PasswordField label="비밀번호 확인" value={form.passwordConfirm} onChange={(value) => setForm({ ...form, passwordConfirm: value })} placeholder="비밀번호 확인" />
@@ -737,6 +686,36 @@ function PwRequestForm({ submitPwRequest, loading }) {
       <textarea value={form.message} onChange={(event) => setForm({ ...form, message: event.target.value })} placeholder="관리자에게 전달할 메시지" />
       <button className="primary" disabled={loading} type="submit"><KeyRound size={17} /> 비밀번호 요청</button>
     </form>
+  );
+}
+
+function ProfilePage({ user, updateProfile, loading }) {
+  const [form, setForm] = useState({
+    affiliation: user?.affiliation || "",
+    phone: user?.phone || "",
+    password: "",
+    passwordConfirm: "",
+  });
+  return (
+    <section className="panel profile-panel">
+      <h2><User size={19} /> 개인정보</h2>
+      <div className="notice">이름은 변경할 수 없습니다. 소속, 전화번호, 비밀번호만 수정할 수 있습니다.</div>
+      <form className="form" onSubmit={(event) => { event.preventDefault(); updateProfile(form); }}>
+        <label>이름<input value={user?.name || ""} disabled readOnly /></label>
+        <div className="two">
+          <label>소속<input value={form.affiliation} onChange={(event) => setForm({ ...form, affiliation: event.target.value })} placeholder="소속" /></label>
+          <label>전화번호<input value={form.phone} onChange={(event) => setForm({ ...form, phone: event.target.value })} placeholder="전화번호" /></label>
+        </div>
+        <div className="notice">비밀번호는 변경할 때만 입력해주세요. 영어와 숫자를 혼용한 8자리입니다.</div>
+        <div className="two">
+          <PasswordField label="새 비밀번호" value={form.password} onChange={(value) => setForm({ ...form, password: value })} placeholder="새 비밀번호" />
+          <PasswordField label="새 비밀번호 확인" value={form.passwordConfirm} onChange={(value) => setForm({ ...form, passwordConfirm: value })} placeholder="새 비밀번호 확인" />
+        </div>
+        <div className="actions centered-actions">
+          <button className="primary" disabled={loading} type="submit"><Save size={16} /> 개인정보 수정</button>
+        </div>
+      </form>
+    </section>
   );
 }
 
@@ -842,17 +821,28 @@ function ReviewRecordList({ records }) {
 
 function UsageRequestPanel({ summary, requests, submitUsageRequest, loading }) {
   const [form, setForm] = useState({ amount: "", note: "" });
+  const [formError, setFormError] = useState("");
   async function submit(event) {
     event.preventDefault();
+    setFormError("");
+    const amount = Number(String(form.amount || "").replace(/\D/g, ""));
+    if (!Number.isFinite(amount) || amount < MIN_USE_MILEAGE) {
+      setFormError("마일리지는 10만 마일리지부터 사용이 가능합니다.");
+      return;
+    }
+    if (amount > summary.balance) {
+      setFormError("현재 보유 마일리지보다 큰 금액은 요청할 수 없습니다.");
+      return;
+    }
     const ok = await submitUsageRequest(form);
     if (ok) setForm({ amount: "", note: "" });
   }
   return (
     <section className="panel">
       <h2><CheckCircle2 size={19} /> 게재료 대체 사용 요청</h2>
-      <div className="notice">마일리지는 10만 마일리지부터 사용이 가능합니다. 현재 사용 가능 마일리지: {won(summary.balance)}</div>
       <form className="form" onSubmit={submit}>
-        <input inputMode="numeric" value={form.amount} onChange={(event) => setForm({ ...form, amount: formatMileageInput(event.target.value) })} placeholder="사용 마일리지 예: 120,000" />
+        <input inputMode="numeric" value={form.amount} onChange={(event) => { setForm({ ...form, amount: formatMileageInput(event.target.value) }); setFormError(""); }} placeholder="사용 마일리지 예: 120,000" />
+        <div className={formError ? "alert error field-alert" : "notice field-alert"}>{formError || `마일리지는 10만 마일리지부터 사용이 가능합니다. 현재 사용 가능 마일리지: ${won(summary.balance)}`}</div>
         <textarea maxLength={500} value={form.note} onChange={(event) => setForm({ ...form, note: event.target.value })} placeholder="관리자에게 전달할 사용 요청 내용(사용할 권이나 호수, 혹은 현재 게재를 원하는 논문명을 적어주세요)" />
         <small className="char-count">{form.note.length}/500자</small>
         <button className="primary" disabled={loading} type="submit">사용 요청</button>
@@ -946,109 +936,6 @@ function AdminSummary({ data }) {
   );
 }
 
-function MessagesPage({ messages, sentMessages, reads, user, markRead, sendUserMessageToAdmin, loading }) {
-  const [form, setForm] = useState({ title: "", content: "" });
-  const unreadCount = messages.filter((message) => !isMessageRead(reads, user?.id, message.id)).length;
-  async function submit(event) {
-    event.preventDefault();
-    const ok = await sendUserMessageToAdmin(form);
-    if (ok) setForm({ title: "", content: "" });
-  }
-  return (
-    <div className="stack">
-      <section className="panel">
-        <h2><Mail size={19} /> 관리자에게 쪽지 보내기</h2>
-        <form className="form" onSubmit={submit}>
-          <input value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} placeholder="쪽지 제목" />
-          <textarea value={form.content} onChange={(event) => setForm({ ...form, content: event.target.value })} placeholder="관리자에게 보낼 쪽지 내용" />
-          <div className="actions centered-actions">
-            <button className="primary" disabled={loading || !form.content.trim()} type="submit">쪽지 보내기</button>
-          </div>
-        </form>
-      </section>
-      <section className="panel">
-        <h2><Mail size={19} /> 쪽지함 <CountBadge count={unreadCount} /></h2>
-        <div className="cards">
-          {messages.length === 0 ? <p className="empty">쪽지가 없습니다.</p> : messages.map((message) => {
-            const unread = !isMessageRead(reads, user?.id, message.id);
-            return (
-              <article className={unread ? "post unread" : "post"} key={message.id} role="button" tabIndex={0} onClick={() => markRead(message)}>
-                <div className="post-head">
-                  <span className="pill">{message.scope === "all" ? "전체" : "개별"}</span>
-                  {unread && <span className="pill pink">읽지 않음</span>}
-                </div>
-                <strong>{message.title}</strong>
-                <p>{message.content}</p>
-                <small>{message.senderName} · {formatDateTime(message.createdAt)}</small>
-              </article>
-            );
-          })}
-        </div>
-      </section>
-      <section className="panel">
-        <h2><Mail size={19} /> 보낸 쪽지</h2>
-        <div className="cards">
-          {sentMessages.length === 0 ? <p className="empty">관리자에게 보낸 쪽지가 없습니다.</p> : sentMessages.map((message) => (
-            <article className="post" key={message.id}>
-              <div className="post-head">
-                <span className="pill">관리자</span>
-              </div>
-              <strong>{message.title}</strong>
-              <p>{message.content}</p>
-              <small>{formatDateTime(message.createdAt)}</small>
-            </article>
-          ))}
-        </div>
-      </section>
-    </div>
-  );
-}
-
-function AdminMessages({ messages, sent, reads, readerId, markRead, deleteMessage }) {
-  const unreadCount = messages.filter((message) => !isMessageRead(reads, readerId, message.id)).length;
-  return (
-    <div className="stack">
-      <section className="panel">
-        <h2><Bell size={19} /> 관리자 수신 쪽지 <CountBadge count={unreadCount} /></h2>
-        <div className="cards">
-          {messages.length === 0 ? <p className="empty">수신 쪽지가 없습니다.</p> : messages.map((message) => {
-            const unread = !isMessageRead(reads, readerId, message.id);
-            return (
-              <article className={unread ? "post unread" : "post"} key={message.id} onClick={() => markRead(message)}>
-                <div className="post-head">
-                  <span className="pill pink">{message.scope === "pwRequest" ? "비번 요청" : message.scope === "memberToAdmin" ? "회원 쪽지" : "수신"}</span>
-                  {unread && <span className="pill">읽지 않음</span>}
-                </div>
-                <strong>{message.title}</strong>
-                <p>{message.content}</p>
-                <footer>
-                  <span>{message.senderName} · {formatDateTime(message.createdAt)}</span>
-                  <button type="button" onClick={(event) => { event.stopPropagation(); deleteMessage(message); }}><Trash2 size={15} /> 삭제</button>
-                </footer>
-              </article>
-            );
-          })}
-        </div>
-      </section>
-      <section className="panel">
-        <h2><Mail size={19} /> 발송 내역</h2>
-        <div className="cards">
-          {sent.length === 0 ? <p className="empty">발송 내역이 없습니다.</p> : sent.sort(sortNewest).map((message) => (
-            <article className="post" key={message.id}>
-              <strong>{message.title}</strong>
-              <p>{message.content}</p>
-              <footer>
-                <span>{message.recipientName} · {formatDateTime(message.createdAt)}</span>
-                <button type="button" onClick={() => deleteMessage(message)}><Trash2 size={15} /> 삭제</button>
-              </footer>
-            </article>
-          ))}
-        </div>
-      </section>
-    </div>
-  );
-}
-
 function AdminPage(props) {
   const { data, tab, setTab, isAdmin, loading, exportExcel, refresh } = props;
   const pendingSignupCount = data.signupRequests.filter((item) => item.status === "pending").length;
@@ -1068,19 +955,13 @@ function AdminPage(props) {
         <button className={tab === "members" ? "active" : ""} type="button" onClick={() => setTab("members")}>회원</button>
         {isAdmin && <button className={tab === "signup" ? "active" : ""} type="button" onClick={() => setTab("signup")}>가입 승인<CountBadge count={pendingSignupCount} /></button>}
         <button className={tab === "usage" ? "active" : ""} type="button" onClick={() => setTab("usage")}>사용 요청<CountBadge count={pendingUsageCount} /></button>
-        <button className={tab === "messages" ? "active" : ""} type="button" onClick={() => setTab("messages")}>쪽지 발송</button>
         <button className={tab === "pw" ? "active" : ""} type="button" onClick={() => setTab("pw")}>비번 요청<CountBadge count={pendingPwCount} /></button>
       </div>
       {tab === "mileage" && <MileageAdmin {...props} />}
       {tab === "members" && <MembersAdmin {...props} />}
       {tab === "signup" && isAdmin && <SignupAdmin {...props} />}
       {tab === "usage" && <UsageRequestsAdmin {...props} />}
-      {tab === "messages" && <MessageComposer {...props} />}
       {tab === "pw" && <PwAdmin {...props} />}
-      <section className="panel muted-panel">
-        <strong>Firebase 다운로드 절감 구조</strong>
-        <p>이 앱은 자동 반복 전체 다운로드를 하지 않습니다. 첨부파일을 Firebase Realtime Database에 base64로 저장하지 않고, 관리자·부관리자의 수동 새로고침과 작업 시점에만 데이터를 가져옵니다.</p>
-      </section>
     </div>
   );
 }
@@ -1233,26 +1114,6 @@ function UsageRequestsAdmin({ data, approveUsageRequest, rejectUsageRequest }) {
   );
 }
 
-function MessageComposer({ data, sendMessage }) {
-  const [form, setForm] = useState({ recipientId: "all", title: "", content: "" });
-  return (
-    <section className="panel">
-      <h2><Mail size={19} /> 쪽지 발송</h2>
-      <form className="form" onSubmit={async (event) => { event.preventDefault(); await sendMessage(form); setForm({ recipientId: "all", title: "", content: "" }); }}>
-        <div className="two">
-          <select value={form.recipientId} onChange={(event) => setForm({ ...form, recipientId: event.target.value })}>
-            <option value="all">전체 회원</option>
-            {data.members.map((member) => <option key={member.id} value={member.id}>{memberLabel(member)}</option>)}
-          </select>
-          <input value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} placeholder="쪽지 제목" />
-        </div>
-        <textarea value={form.content} onChange={(event) => setForm({ ...form, content: event.target.value })} placeholder="쪽지 내용" />
-        <button className="primary" type="submit">쪽지 보내기</button>
-      </form>
-    </section>
-  );
-}
-
 function PwAdmin({ data, resolvePwRequest }) {
   return (
     <section className="panel">
@@ -1280,12 +1141,10 @@ function PwAdmin({ data, resolvePwRequest }) {
 }
 
 async function fetchRemoteData() {
-  const [members, signupRequests, mileageRecords, messages, messageReads, pwRequests, usageRequests, withdrawals] = await Promise.all([
+  const [members, signupRequests, mileageRecords, pwRequests, usageRequests, withdrawals] = await Promise.all([
     fbGet("members"),
     fbGet("signupRequests"),
     fbGet("mileageRecords"),
-    fbGet("messages"),
-    fbGet("messageReads"),
     fbGet("pwRequests"),
     fbGet("usageRequests"),
     fbGet("withdrawals"),
@@ -1294,8 +1153,6 @@ async function fetchRemoteData() {
     members: toArray(members).sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""), "ko")),
     signupRequests: toArray(signupRequests).sort(sortNewest),
     mileageRecords: toArray(mileageRecords).sort(sortNewest),
-    messages: toArray(messages).sort(sortNewest),
-    messageReads: toArray(messageReads, "key"),
     pwRequests: toArray(pwRequests).sort(sortNewest),
     usageRequests: toArray(usageRequests).sort(sortNewest),
     withdrawals: toArray(withdrawals).sort(sortNewest),
@@ -1417,19 +1274,6 @@ function upsertById(items, item) {
   return items.some((entry) => entry.id === item.id) ? items.map((entry) => entry.id === item.id ? item : entry) : [item, ...items];
 }
 
-function upsertByKey(items, item, keyField) {
-  return items.some((entry) => entry[keyField] === item[keyField]) ? items.map((entry) => entry[keyField] === item[keyField] ? item : entry) : [item, ...items];
-}
-
-function getVisibleMessages(messages, user, isAdmin) {
-  if (!user || isAdmin) return [];
-  return messages.filter((item) => item.recipientId === "all" || item.recipientId === user.id).sort(sortNewest);
-}
-
-function isMessageRead(reads, memberId, messageId) {
-  return reads.some((item) => item.key === `${memberId}_${messageId}` || (item.memberId === memberId && item.messageId === messageId));
-}
-
 function isSubAdminMember(member) {
   return member?.role === "subAdmin";
 }
@@ -1440,22 +1284,6 @@ function findPwMember(req, members) {
     if (byId) return byId;
   }
   return pickLatest(members.filter((item) => item.name === req.name && item.phone === req.phone));
-}
-
-function buildPwAdminMessage(req, member) {
-  const password = member?.password || req.resolvedPassword || "확인 불가";
-  return {
-    id: makeId("message"),
-    recipientId: "admin",
-    recipientName: "관리자",
-    scope: "pwRequest",
-    title: `비밀번호 요청: ${req.name}`,
-    content: [`${req.name}님의 비밀번호 요청입니다.`, `전화번호: ${req.phone}`, `현재 비밀번호: ${password}`, req.message ? `요청 메시지: ${req.message}` : ""].filter(Boolean).join("\n"),
-    senderId: "system",
-    senderName: "비밀번호 요청 시스템",
-    relatedPwRequestId: req.id,
-    createdAt: req.createdAt,
-  };
 }
 
 function mileageSummary(memberId, records) {
@@ -1537,7 +1365,6 @@ function downloadExcel(data) {
     { name: "회원", columns: ["이름", "소속", "전화번호", "권한", "비밀번호", "가입일"], rows: data.members.map((m) => [m.name, m.affiliation, m.phone, isSubAdminMember(m) ? "부관리자" : "회원", m.password, formatDateTime(m.joinedAt)]) },
     { name: "마일리지", columns: ["회원", "소속", "전화번호", "구분", "금액", "권", "호", "논문제목", "메모", "입력자", "일시"], rows: data.mileageRecords.map((r) => [r.memberName, r.memberAffiliation, r.memberPhone, r.type, r.amount, r.volume, r.issue, r.paperTitle, r.note, r.editorName, formatDateTime(r.createdAt)]) },
     { name: "사용요청", columns: ["회원", "소속", "전화번호", "금액", "상태", "메모", "요청일", "처리일", "처리자"], rows: data.usageRequests.map((r) => [r.memberName, r.memberAffiliation, r.memberPhone, r.amount, r.status, r.note, formatDateTime(r.createdAt), formatDateTime(r.reviewedAt), r.reviewedBy]) },
-    { name: "쪽지", columns: ["제목", "내용", "발신", "수신", "구분", "일시"], rows: data.messages.map((m) => [m.title, m.content, m.senderName, m.recipientName, m.scope, formatDateTime(m.createdAt)]) },
     { name: "비번요청", columns: ["이름", "전화번호", "비밀번호", "상태", "메시지", "일시"], rows: data.pwRequests.map((r) => [r.name, r.phone, findPwMember(r, data.members)?.password || r.resolvedPassword, r.status, r.message, formatDateTime(r.createdAt)]) },
     { name: "가입신청", columns: ["이름", "소속", "전화번호", "상태", "신청일"], rows: data.signupRequests.map((r) => [r.name, r.affiliation, r.phone, r.status, formatDateTime(r.requestedAt)]) },
   ];
