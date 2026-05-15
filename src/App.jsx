@@ -54,6 +54,7 @@ const EMPTY_DATA = {
   pwRequests: [],
   usageRequests: [],
   withdrawals: [],
+  deletionLogs: [],
   settings: { ...DEFAULT_SETTINGS },
 };
 
@@ -386,10 +387,10 @@ function App() {
     updateData({ ...dataRef.current, mileageRecords: dataRef.current.mileageRecords.filter((item) => item.id !== record.id) });
   }
 
-  async function deleteHistoryRecords(kind, records) {
+  async function deleteHistoryRecords(kind, records, auth) {
     const items = Array.isArray(records) ? records : [records];
     const targets = items.filter(Boolean);
-    if (targets.length === 0) return;
+    if (targets.length === 0) return false;
 
     const config = {
       signup: { collection: "signupRequests", stateKey: "signupRequests", label: "가입 승인 기록", allowed: isAdmin },
@@ -398,12 +399,28 @@ function App() {
       mileageUse: { collection: "mileageRecords", stateKey: "mileageRecords", label: "마일리지 사용 기록", allowed: canAdmin },
     }[kind];
 
-    if (!config?.allowed) return;
-    const mileageNotice = kind === "mileageUse" ? " 마일리지 사용 기록을 삭제하면 회원의 사용 총계와 현재 잔여 마일리지가 바뀝니다." : "";
-    if (!window.confirm(`${config.label} ${targets.length}건을 삭제할까요? 삭제 후 복구할 수 없습니다.${mileageNotice}`)) return;
+    if (!config?.allowed) throw new Error("해당 기록을 삭제할 권한이 없습니다.");
+    const password = auth?.password?.trim();
+    const reason = auth?.reason?.trim();
+    if (!password || !reason) throw new Error("비밀번호와 삭제 이유를 모두 입력해주세요.");
+    const expectedPassword = isAdmin ? getAdminPassword(dataRef.current) : sessionUser?.password;
+    if (!expectedPassword || password !== expectedPassword) throw new Error("현재 로그인 비밀번호가 일치하지 않습니다.");
 
+    clearAlerts();
     setLoading(true);
     try {
+      const log = {
+        id: makeId("deleteLog"),
+        kind,
+        label: config.label,
+        count: targets.length,
+        reason,
+        deletedAt: now(),
+        deletedBy: isAdmin ? "관리자" : `${sessionUser.name} 부관리자`,
+        deleterId: isAdmin ? "admin" : sessionUser.id,
+        deletedRecords: targets.map((item) => deletionRecordSummary(kind, item)),
+      };
+      await fbPatch("deletionLogs", { [firebaseKey(log.id)]: cleanFirebase(log) });
       await Promise.all(targets.map((item) => fbDelete(`${config.collection}/${firebaseRecordKey(item, item.id)}`)));
       const targetIds = new Set(targets.map((item) => item.id));
       const targetKeys = new Set(targets.map((item) => firebaseRecordKey(item, item.id)));
@@ -412,11 +429,13 @@ function App() {
         [config.stateKey]: dataRef.current[config.stateKey].filter((item) => (
           !targetIds.has(item.id) && !targetKeys.has(firebaseRecordKey(item, item.id))
         )),
+        deletionLogs: [log, ...dataRef.current.deletionLogs].sort(sortNewest),
       });
       setMessage(`${config.label} ${targets.length}건을 삭제했습니다.`);
+      return true;
     } catch (err) {
       console.error(err);
-      setError(firebaseErrorText(err, config.label));
+      throw new Error(firebaseErrorText(err, config.label));
     } finally {
       setLoading(false);
     }
@@ -1037,7 +1056,7 @@ function AdminPage(props) {
     ...data.usageRequests.filter(isProcessed),
     ...data.pwRequests.filter(isProcessed),
     ...data.mileageRecords.filter((item) => item.type === "use"),
-  ].length;
+  ].length + data.deletionLogs.length;
   return (
     <div className="stack">
       <section className="toolbar">
@@ -1256,17 +1275,46 @@ function PwAdmin({ data, resolvePwRequest }) {
   );
 }
 
-function HistoryAdmin({ data, isAdmin, deleteHistoryRecords }) {
+function HistoryAdmin({ data, isAdmin, deleteHistoryRecords, loading }) {
   const signupHistory = data.signupRequests.filter(isProcessed).sort(sortNewest);
   const usageHistory = data.usageRequests.filter(isProcessed).sort(sortNewest);
   const pwHistory = data.pwRequests.filter(isProcessed).sort(sortNewest);
   const mileageUseHistory = data.mileageRecords.filter((item) => item.type === "use").sort(sortNewest);
+  const deletionLogs = [...data.deletionLogs].sort(sortNewest);
+  const [deleteTarget, setDeleteTarget] = useState(null);
+  const [deleteForm, setDeleteForm] = useState({ password: "", reason: "" });
+  const [deleteError, setDeleteError] = useState("");
+
+  function openDelete(kind, records, label) {
+    const items = Array.isArray(records) ? records.filter(Boolean) : [records].filter(Boolean);
+    if (items.length === 0) return;
+    setDeleteTarget({ kind, items, label, count: items.length });
+    setDeleteForm({ password: "", reason: "" });
+    setDeleteError("");
+  }
+
+  function closeDelete() {
+    setDeleteTarget(null);
+    setDeleteForm({ password: "", reason: "" });
+    setDeleteError("");
+  }
+
+  async function submitDelete(event) {
+    event.preventDefault();
+    setDeleteError("");
+    try {
+      const ok = await deleteHistoryRecords(deleteTarget.kind, deleteTarget.items, deleteForm);
+      if (ok) closeDelete();
+    } catch (err) {
+      setDeleteError(err?.message || "기록 삭제 중 오류가 발생했습니다.");
+    }
+  }
 
   return (
     <div className="stack">
       <section className="panel">
         <h2><FileSpreadsheet size={19} /> 기록 관리</h2>
-        <div className="notice">승인·거부·처리 완료된 과거 기록을 보존해서 확인하는 곳입니다. 현재 업무 탭에는 대기 중인 항목만 표시됩니다.</div>
+        <div className="notice">승인·거부·처리 완료된 과거 기록을 보존해서 확인하는 곳입니다. 기록을 삭제하려면 현재 로그인 비밀번호와 삭제 이유를 반드시 입력해야 합니다.</div>
       </section>
 
       {isAdmin && (
@@ -1274,7 +1322,7 @@ function HistoryAdmin({ data, isAdmin, deleteHistoryRecords }) {
           title="가입 승인 기록"
           items={signupHistory}
           emptyText="가입 승인 과거 기록이 없습니다."
-          onClear={() => deleteHistoryRecords("signup", signupHistory)}
+          onClear={() => openDelete("signup", signupHistory, "가입 승인 기록 전체")}
         >
           {signupHistory.map((req) => (
             <article className="post member-row" key={req.id}>
@@ -1284,7 +1332,7 @@ function HistoryAdmin({ data, isAdmin, deleteHistoryRecords }) {
                 <small>신청 {formatDateTime(req.requestedAt)}{req.reviewedAt ? ` · 처리 ${formatDateTime(req.reviewedAt)}` : ""}</small>
               </div>
               <span className="post-actions">
-                <button type="button" onClick={() => deleteHistoryRecords("signup", req)}><Trash2 size={15} /> 삭제</button>
+                <button type="button" onClick={() => openDelete("signup", req, `${req.name} 가입 승인 기록`)}><Trash2 size={15} /> 삭제</button>
               </span>
             </article>
           ))}
@@ -1295,7 +1343,7 @@ function HistoryAdmin({ data, isAdmin, deleteHistoryRecords }) {
         title="사용 요청 기록"
         items={usageHistory}
         emptyText="사용 요청 과거 기록이 없습니다."
-        onClear={() => deleteHistoryRecords("usage", usageHistory)}
+        onClear={() => openDelete("usage", usageHistory, "사용 요청 기록 전체")}
       >
         {usageHistory.map((request) => (
           <article className="post member-row" key={request.id}>
@@ -1306,7 +1354,7 @@ function HistoryAdmin({ data, isAdmin, deleteHistoryRecords }) {
               <small>요청 {formatDateTime(request.createdAt)}{request.reviewedAt ? ` · 처리 ${formatDateTime(request.reviewedAt)}` : ""}</small>
             </div>
             <span className="post-actions">
-              <button type="button" onClick={() => deleteHistoryRecords("usage", request)}><Trash2 size={15} /> 삭제</button>
+              <button type="button" onClick={() => openDelete("usage", request, `${request.memberName} 사용 요청 기록`)}><Trash2 size={15} /> 삭제</button>
             </span>
           </article>
         ))}
@@ -1316,7 +1364,7 @@ function HistoryAdmin({ data, isAdmin, deleteHistoryRecords }) {
         title="비번 요청 기록"
         items={pwHistory}
         emptyText="비번 요청 과거 기록이 없습니다."
-        onClear={() => deleteHistoryRecords("pw", pwHistory)}
+        onClear={() => openDelete("pw", pwHistory, "비번 요청 기록 전체")}
       >
         {pwHistory.map((req) => {
           const member = findPwMember(req, data.members);
@@ -1331,7 +1379,7 @@ function HistoryAdmin({ data, isAdmin, deleteHistoryRecords }) {
                 <small>요청 {formatDateTime(req.createdAt)}{req.resolvedAt ? ` · 처리 ${formatDateTime(req.resolvedAt)}` : ""}</small>
               </div>
               <span className="post-actions">
-                <button type="button" onClick={() => deleteHistoryRecords("pw", req)}><Trash2 size={15} /> 삭제</button>
+                <button type="button" onClick={() => openDelete("pw", req, `${req.name} 비번 요청 기록`)}><Trash2 size={15} /> 삭제</button>
               </span>
             </article>
           );
@@ -1342,7 +1390,7 @@ function HistoryAdmin({ data, isAdmin, deleteHistoryRecords }) {
         title="마일리지 사용 기록"
         items={mileageUseHistory}
         emptyText="마일리지 사용 과거 기록이 없습니다."
-        onClear={() => deleteHistoryRecords("mileageUse", mileageUseHistory)}
+        onClear={() => openDelete("mileageUse", mileageUseHistory, "마일리지 사용 기록 전체")}
       >
         {mileageUseHistory.map((record) => (
           <article className="post member-row" key={record.id}>
@@ -1354,11 +1402,50 @@ function HistoryAdmin({ data, isAdmin, deleteHistoryRecords }) {
               <small>{formatDateTime(record.createdAt)} · {record.editorName}</small>
             </div>
             <span className="post-actions">
-              <button type="button" onClick={() => deleteHistoryRecords("mileageUse", record)}><Trash2 size={15} /> 삭제</button>
+              <button type="button" onClick={() => openDelete("mileageUse", record, `${record.memberName} 마일리지 사용 기록`)}><Trash2 size={15} /> 삭제</button>
             </span>
           </article>
         ))}
       </HistorySection>
+
+      <section className="panel">
+        <div className="toolbar slim">
+          <h2>삭제 이유 기록 <span className="muted-count">{deletionLogs.length}건</span></h2>
+        </div>
+        <div className="notice">삭제 이유 기록은 감사와 관리를 위해 보존되며, 이 화면에서는 삭제할 수 없습니다.</div>
+        {deletionLogs.length === 0 ? <p className="empty">저장된 삭제 이유 기록이 없습니다.</p> : (
+          <div className="cards">
+            {deletionLogs.map((log) => (
+              <article className="post" key={log.id}>
+                <strong>{log.label} {log.count}건 삭제</strong>
+                <p>삭제 이유: {log.reason}</p>
+                <p>삭제자: {log.deletedBy}</p>
+                <small>{formatDateTime(log.deletedAt)}</small>
+                {Array.isArray(log.deletedRecords) && log.deletedRecords.length > 0 && (
+                  <details className="history-details">
+                    <summary>삭제 대상 보기</summary>
+                    <ul>
+                      {log.deletedRecords.map((record, index) => <li key={`${log.id}-${index}`}>{deletionRecordText(record)}</li>)}
+                    </ul>
+                  </details>
+                )}
+              </article>
+            ))}
+          </div>
+        )}
+      </section>
+
+      {deleteTarget && (
+        <DeletionConfirmModal
+          target={deleteTarget}
+          form={deleteForm}
+          setForm={setDeleteForm}
+          error={deleteError}
+          loading={loading}
+          onCancel={closeDelete}
+          onSubmit={submitDelete}
+        />
+      )}
     </div>
   );
 }
@@ -1372,6 +1459,31 @@ function HistorySection({ title, items, emptyText, onClear, children }) {
       </div>
       {items.length === 0 ? <p className="empty">{emptyText}</p> : <div className="cards">{children}</div>}
     </section>
+  );
+}
+
+function DeletionConfirmModal({ target, form, setForm, error, loading, onCancel, onSubmit }) {
+  const mileageNotice = target.kind === "mileageUse" ? "마일리지 사용 기록을 삭제하면 회원의 사용 총계와 현재 잔여 마일리지가 바뀝니다." : "삭제된 기록은 복구할 수 없습니다.";
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <section className="modal-panel" role="dialog" aria-modal="true" aria-label="기록 삭제 확인">
+        <h2><Trash2 size={19} /> 기록 삭제 확인</h2>
+        <div className="alert error">{target.label} {target.count}건을 삭제합니다. {mileageNotice}</div>
+        <form className="form" onSubmit={onSubmit}>
+          <PasswordField label="현재 로그인 비밀번호" value={form.password} onChange={(value) => setForm({ ...form, password: value })} placeholder="비밀번호 재입력" />
+          <label>
+            삭제 이유
+            <textarea maxLength={500} value={form.reason} onChange={(event) => setForm({ ...form, reason: event.target.value })} placeholder="삭제 이유를 입력해주세요" />
+          </label>
+          <small className="char-count">{form.reason.length}/500자</small>
+          {error && <div className="alert error field-alert">{error}</div>}
+          <div className="actions centered-actions">
+            <button type="button" onClick={onCancel}>취소</button>
+            <button className="primary" disabled={loading} type="submit"><Trash2 size={15} /> 비밀번호 확인 후 삭제</button>
+          </div>
+        </form>
+      </section>
+    </div>
   );
 }
 
@@ -1400,13 +1512,14 @@ function AdminPasswordPanel({ updateAdminPassword, loading }) {
 }
 
 async function fetchRemoteData() {
-  const [members, signupRequests, mileageRecords, pwRequests, usageRequests, withdrawals, settings] = await Promise.all([
+  const [members, signupRequests, mileageRecords, pwRequests, usageRequests, withdrawals, deletionLogs, settings] = await Promise.all([
     fbGet("members"),
     fbGet("signupRequests"),
     fbGet("mileageRecords"),
     fbGet("pwRequests"),
     fbGet("usageRequests"),
     fbGet("withdrawals"),
+    fbGet("deletionLogs"),
     fbGet("settings"),
   ]);
   return {
@@ -1416,6 +1529,7 @@ async function fetchRemoteData() {
     pwRequests: toArray(pwRequests).sort(sortNewest),
     usageRequests: toArray(usageRequests).sort(sortNewest),
     withdrawals: toArray(withdrawals).sort(sortNewest),
+    deletionLogs: toArray(deletionLogs).sort(sortNewest),
     settings: { ...DEFAULT_SETTINGS, ...(settings || {}) },
   };
 }
@@ -1544,6 +1658,69 @@ function isProcessed(item) {
   return item?.status && item.status !== "pending";
 }
 
+function deletionRecordSummary(kind, item) {
+  const base = {
+    sourceId: item.id || "",
+    sourceKey: item._fbKey || "",
+    status: item.status || "",
+  };
+  if (kind === "signup") {
+    return {
+      ...base,
+      kind,
+      name: item.name || "",
+      affiliation: item.affiliation || "",
+      phone: item.phone || "",
+      requestedAt: item.requestedAt || "",
+      reviewedAt: item.reviewedAt || "",
+    };
+  }
+  if (kind === "usage") {
+    return {
+      ...base,
+      kind,
+      memberName: item.memberName || "",
+      memberAffiliation: item.memberAffiliation || "",
+      memberPhone: item.memberPhone || "",
+      amount: item.amount || 0,
+      note: item.note || "",
+      createdAt: item.createdAt || "",
+      reviewedAt: item.reviewedAt || "",
+    };
+  }
+  if (kind === "pw") {
+    return {
+      ...base,
+      kind,
+      name: item.name || "",
+      phone: item.phone || "",
+      message: item.message || "",
+      createdAt: item.createdAt || "",
+      resolvedAt: item.resolvedAt || "",
+    };
+  }
+  return {
+    ...base,
+    kind,
+    memberName: item.memberName || "",
+    memberAffiliation: item.memberAffiliation || "",
+    memberPhone: item.memberPhone || "",
+    amount: item.amount || 0,
+    volume: item.volume || "",
+    issue: item.issue || "",
+    paperTitle: item.paperTitle || "",
+    note: item.note || "",
+    createdAt: item.createdAt || "",
+  };
+}
+
+function deletionRecordText(record) {
+  if (record.kind === "signup") return `${record.name} · ${record.affiliation} · ${record.phone} · ${statusText(record.status)}`;
+  if (record.kind === "usage") return `${record.memberName} · ${won(record.amount)} 마일리지 · ${statusText(record.status)}`;
+  if (record.kind === "pw") return `${record.name} · ${record.phone} · ${statusText(record.status)}`;
+  return `${record.memberName} · 사용 ${won(record.amount)} 마일리지${record.paperTitle ? ` · ${record.paperTitle}` : ""}`;
+}
+
 function findPwMember(req, members) {
   if (req.memberId) {
     const byId = members.find((item) => item.id === req.memberId);
@@ -1617,7 +1794,7 @@ function sortNewest(a, b) {
 }
 
 function recordTime(record) {
-  return Date.parse(record?.updatedAt || record?.createdAt || record?.requestedAt || record?.reviewedAt || record?.joinedAt || record?.withdrawnAt || "") || 0;
+  return Date.parse(record?.deletedAt || record?.updatedAt || record?.createdAt || record?.requestedAt || record?.reviewedAt || record?.resolvedAt || record?.joinedAt || record?.withdrawnAt || "") || 0;
 }
 
 function pickLatest(items) {
@@ -1646,6 +1823,7 @@ function downloadExcel(data) {
     { name: "사용요청", columns: ["회원", "소속", "전화번호", "금액", "상태", "메모", "요청일", "처리일", "처리자"], rows: data.usageRequests.map((r) => [r.memberName, r.memberAffiliation, r.memberPhone, r.amount, r.status, r.note, formatDateTime(r.createdAt), formatDateTime(r.reviewedAt), r.reviewedBy]) },
     { name: "비번요청", columns: ["이름", "전화번호", "비밀번호", "상태", "메시지", "일시"], rows: data.pwRequests.map((r) => [r.name, r.phone, findPwMember(r, data.members)?.password || r.resolvedPassword, r.status, r.message, formatDateTime(r.createdAt)]) },
     { name: "가입신청", columns: ["이름", "소속", "전화번호", "상태", "신청일"], rows: data.signupRequests.map((r) => [r.name, r.affiliation, r.phone, r.status, formatDateTime(r.requestedAt)]) },
+    { name: "삭제이유", columns: ["기록구분", "삭제건수", "삭제이유", "삭제자", "삭제일", "삭제대상"], rows: data.deletionLogs.map((r) => [r.label, r.count, r.reason, r.deletedBy, formatDateTime(r.deletedAt), Array.isArray(r.deletedRecords) ? r.deletedRecords.map(deletionRecordText).join(" / ") : ""]) },
   ];
   const xml = `<?xml version="1.0" encoding="UTF-8"?><?mso-application progid="Excel.Sheet"?><Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">${sheets.map(sheetXml).join("")}</Workbook>`;
   const blob = new Blob(["\ufeff", xml], { type: "application/vnd.ms-excel;charset=utf-8" });

@@ -547,8 +547,46 @@ textarea {
   background: var(--pink);
 }
 
+.history-details {
+  margin-top: 10px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.history-details summary {
+  cursor: pointer;
+  color: var(--brand-blue);
+}
+
+.history-details ul {
+  margin: 8px 0 0;
+  padding-left: 18px;
+}
+
 .empty {
   color: var(--muted);
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  background: rgba(14, 35, 48, 0.36);
+}
+
+.modal-panel {
+  width: min(620px, 100%);
+  max-height: calc(100vh - 36px);
+  overflow: auto;
+  padding: 18px;
+  border: 1.5px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 18px 60px rgba(14, 35, 48, 0.22);
 }
 
 @media (max-width: 900px) {
