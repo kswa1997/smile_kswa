@@ -32,11 +32,14 @@ const DB_CANDIDATES = [
   `https://${PROJECT_ID}-default-rtdb.europe-west1.firebasedatabase.app`,
 ].filter(Boolean);
 const ADMIN_ID = "kswa1997";
-const ADMIN_PW = "love1004";
+const ADMIN_DEFAULT_PW = "love1004";
 const REVIEW_MILEAGE = 30000;
 const MAX_MILEAGE = 1200000;
 const MIN_USE_MILEAGE = 100000;
 const PASSWORD_RULE = /^(?=.*[A-Za-z])(?=.*\d)[A-Za-z\d]{8}$/;
+const DEFAULT_SETTINGS = {
+  adminPassword: ADMIN_DEFAULT_PW,
+};
 
 const STORAGE = {
   user: "smile_user",
@@ -51,6 +54,7 @@ const EMPTY_DATA = {
   pwRequests: [],
   usageRequests: [],
   withdrawals: [],
+  settings: { ...DEFAULT_SETTINGS },
 };
 
 function App() {
@@ -111,17 +115,24 @@ function App() {
       setError("이름과 비밀번호를 입력해주세요. 비밀번호는 영어와 숫자를 혼용한 8자리입니다.");
       return;
     }
-    if (form.name.trim() === ADMIN_ID && form.password.trim() === ADMIN_PW) {
+    if (form.name.trim() === ADMIN_ID) {
       setLoading(true);
-      const remote = await fetchRemoteData().catch(() => dataRef.current);
-      updateData(remote);
-      const adminUser = { id: "admin", name: "관리자" };
-      setUser(adminUser);
-      setIsAdmin(true);
-      writeStorage(STORAGE.user, adminUser);
-      writeStorage(STORAGE.admin, true);
-      setPage("home");
-      setLoading(false);
+      try {
+        const remote = await fetchRemoteData().catch(() => dataRef.current);
+        updateData(remote);
+        if (form.password.trim() !== getAdminPassword(remote)) {
+          setError("관리자 ID 또는 비밀번호가 일치하지 않습니다.");
+          return;
+        }
+        const adminUser = { id: "admin", name: "관리자" };
+        setUser(adminUser);
+        setIsAdmin(true);
+        writeStorage(STORAGE.user, adminUser);
+        writeStorage(STORAGE.admin, true);
+        setPage("home");
+      } finally {
+        setLoading(false);
+      }
       return;
     }
     if (!PASSWORD_RULE.test(form.password.trim())) {
@@ -222,6 +233,10 @@ function App() {
     try {
       const remote = await fetchRemoteData();
       const member = pickLatest(remote.members.filter((item) => item.name === form.name.trim() && item.phone === form.phone.trim()));
+      if (!member) {
+        setError("요청하신 이름과 전화번호가 없습니다. 가입여부를 확인해주세요.");
+        return;
+      }
       const exists = remote.pwRequests.some((item) => item.status === "pending" && item.name === form.name.trim() && item.phone === form.phone.trim());
       if (exists) {
         setError("이미 처리 대기 중인 비밀번호 요청이 있습니다.");
@@ -229,11 +244,11 @@ function App() {
       }
       const req = {
         id: makeId("pw"),
-        memberId: member?.id || "",
+        memberId: member.id,
         name: form.name.trim(),
         phone: form.phone.trim(),
         message: form.message.trim(),
-        resolvedPassword: member?.password || "",
+        resolvedPassword: member.password || "",
         status: "pending",
         createdAt: now(),
       };
@@ -316,6 +331,9 @@ function App() {
     if (!member) throw new Error("심사자를 선택해주세요.");
     const amount = form.type === "earn" ? REVIEW_MILEAGE : Number(form.amount || 0);
     if (!Number.isFinite(amount) || amount <= 0) throw new Error("마일리지 금액을 입력해주세요.");
+    if (!form.paperTitle.trim() || !form.volume.trim() || !form.issue.trim()) {
+      throw new Error("논문 제목과 권, 호수를 모두 입력해야 마일리지를 적립할 수 있습니다.");
+    }
     const otherRecords = dataRef.current.mileageRecords.filter((item) => item.id !== editingRecord?.id);
     const currentBalance = mileageSummary(member.id, otherRecords).balance;
     if (form.type === "earn" && currentBalance + amount > MAX_MILEAGE) {
@@ -509,6 +527,51 @@ function App() {
     }
   }
 
+  async function updateAdminPassword(form) {
+    clearAlerts();
+    if (!isAdmin) {
+      setError("관리자 비밀번호는 관리자만 변경할 수 있습니다.");
+      return false;
+    }
+    const currentPassword = form.currentPassword.trim();
+    const password = form.password.trim();
+    const passwordConfirm = form.passwordConfirm.trim();
+    if (!currentPassword || !password || !passwordConfirm) {
+      setError("현재 비밀번호와 새 비밀번호를 모두 입력해주세요.");
+      return false;
+    }
+    if (currentPassword !== getAdminPassword(dataRef.current)) {
+      setError("현재 관리자 비밀번호가 일치하지 않습니다.");
+      return false;
+    }
+    if (!PASSWORD_RULE.test(password)) {
+      setError("새 관리자 비밀번호는 영어와 숫자를 혼용한 8자리입니다. 예: a1234567");
+      return false;
+    }
+    if (password !== passwordConfirm) {
+      setError("새 관리자 비밀번호 확인이 일치하지 않습니다.");
+      return false;
+    }
+
+    setLoading(true);
+    try {
+      const settings = {
+        ...dataRef.current.settings,
+        adminPassword: password,
+        adminPasswordUpdatedAt: now(),
+      };
+      await fbPatch("settings", cleanFirebase(settings));
+      updateData({ ...dataRef.current, settings });
+      setMessage("관리자 비밀번호가 변경되었습니다. 다음 로그인부터 새 비밀번호를 사용해주세요.");
+      return true;
+    } catch (err) {
+      setError(firebaseErrorText(err, "관리자 비밀번호 변경"));
+      return false;
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function resolvePwRequest(req) {
     if (!canAdmin) return;
     const updated = { ...req, status: "done", resolvedAt: now() };
@@ -599,6 +662,7 @@ function App() {
           approveUsageRequest={approveUsageRequest}
           rejectUsageRequest={rejectUsageRequest}
           resolvePwRequest={resolvePwRequest}
+          updateAdminPassword={updateAdminPassword}
           exportExcel={exportExcel}
           refresh={() => refreshData()}
         />
@@ -774,7 +838,6 @@ function InfoTile({ tone, title, icon, active, onClick }) {
 }
 
 function MileageDetail({ member, summary, records, refresh, loading }) {
-  const reviewRecords = records.filter((record) => record.type === "earn");
   return (
     <section className="panel">
       <div className="toolbar slim">
@@ -788,34 +851,9 @@ function MileageDetail({ member, summary, records, refresh, loading }) {
         <Metric label="차감 마일리지" value={won(summary.deducted)} />
         <Metric label="현재 마일리지" value={won(summary.balance)} />
       </div>
-      <div className="detail-grid">
-        <div>
-          <h3>마일리지 기록</h3>
-          <RecordList records={records} />
-        </div>
-        <div>
-          <h3>논문 심사기록</h3>
-          <ReviewRecordList records={reviewRecords} />
-        </div>
-      </div>
+      <h3>마일리지 기록</h3>
+      <RecordList records={records} />
     </section>
-  );
-}
-
-function ReviewRecordList({ records }) {
-  if (records.length === 0) return <p className="empty">논문 심사기록이 없습니다.</p>;
-  return (
-    <div className="cards">
-      {records.map((record) => (
-        <article className="post" key={record.id}>
-          <strong>{record.volume || "-"}권 {record.issue || "-"}호</strong>
-          {record.paperTitle && <p>논문 제목: {record.paperTitle}</p>}
-          <p>적립 {won(record.amount)} 마일리지</p>
-          {record.note && <p>{record.note}</p>}
-          <small>{formatDateTime(record.createdAt)} · {record.editorName}</small>
-        </article>
-      ))}
-    </div>
   );
 }
 
@@ -911,7 +949,8 @@ function RecordList({ records }) {
       {records.map((record) => (
         <article className="post" key={record.id}>
           <strong>{recordText(record)}</strong>
-          {record.paperTitle && <p>논문 제목: {record.paperTitle}</p>}
+          <p>논문 제목: {record.paperTitle || "-"}</p>
+          <p>권호: {record.volume || "-"}권 {record.issue || "-"}호</p>
           {record.note && <p>{record.note}</p>}
           <small>{formatDateTime(record.createdAt)} · {record.editorName}</small>
         </article>
@@ -956,12 +995,14 @@ function AdminPage(props) {
         {isAdmin && <button className={tab === "signup" ? "active" : ""} type="button" onClick={() => setTab("signup")}>가입 승인<CountBadge count={pendingSignupCount} /></button>}
         <button className={tab === "usage" ? "active" : ""} type="button" onClick={() => setTab("usage")}>사용 요청<CountBadge count={pendingUsageCount} /></button>
         <button className={tab === "pw" ? "active" : ""} type="button" onClick={() => setTab("pw")}>비번 요청<CountBadge count={pendingPwCount} /></button>
+        {isAdmin && <button className={tab === "adminPassword" ? "active" : ""} type="button" onClick={() => setTab("adminPassword")}>관리자 비번</button>}
       </div>
       {tab === "mileage" && <MileageAdmin {...props} />}
       {tab === "members" && <MembersAdmin {...props} />}
       {tab === "signup" && isAdmin && <SignupAdmin {...props} />}
       {tab === "usage" && <UsageRequestsAdmin {...props} />}
       {tab === "pw" && <PwAdmin {...props} />}
+      {tab === "adminPassword" && isAdmin && <AdminPasswordPanel {...props} />}
     </div>
   );
 }
@@ -969,6 +1010,7 @@ function AdminPage(props) {
 function MileageAdmin({ data, saveMileage, deleteMileage }) {
   const [editing, setEditing] = useState(null);
   const [form, setForm] = useState({ memberId: data.members[0]?.id || "", type: "earn", amount: REVIEW_MILEAGE, volume: "", issue: "", paperTitle: "", note: "" });
+  const [formError, setFormError] = useState("");
   const selected = data.members.find((member) => member.id === form.memberId);
   const summary = selected ? mileageSummary(selected.id, data.mileageRecords) : null;
 
@@ -987,13 +1029,23 @@ function MileageAdmin({ data, saveMileage, deleteMileage }) {
 
   function reset() {
     setEditing(null);
+    setFormError("");
     setForm({ memberId: data.members[0]?.id || "", type: "earn", amount: REVIEW_MILEAGE, volume: "", issue: "", paperTitle: "", note: "" });
   }
 
   return (
     <section className="panel">
       <h2><Plus size={19} /> 마일리지 입력</h2>
-      <form className="form" onSubmit={async (event) => { event.preventDefault(); await saveMileage(form, editing); reset(); }}>
+      <form className="form" onSubmit={async (event) => {
+        event.preventDefault();
+        setFormError("");
+        try {
+          await saveMileage(form, editing);
+          reset();
+        } catch (err) {
+          setFormError(err?.message || "마일리지 적립 중 오류가 발생했습니다.");
+        }
+      }}>
         <div className="two">
           <select value={form.memberId} onChange={(event) => setForm({ ...form, memberId: event.target.value })}>
             {data.members.map((member) => <option key={member.id} value={member.id}>{memberLabel(member)} · {member.affiliation} · {member.phone}</option>)}
@@ -1006,11 +1058,12 @@ function MileageAdmin({ data, saveMileage, deleteMileage }) {
         </div>
         {selected && <div className="notice">선택 심사자: {selected.name} · {selected.affiliation} · {selected.phone} · 현재 {won(summary.balance)}</div>}
         <div className="three">
-          <input value={form.volume} onChange={(event) => setForm({ ...form, volume: event.target.value })} placeholder="권 예: 10" />
-          <input value={form.issue} onChange={(event) => setForm({ ...form, issue: event.target.value })} placeholder="호 예: 3" />
+          <input value={form.volume} onChange={(event) => { setForm({ ...form, volume: event.target.value }); setFormError(""); }} placeholder="권 예: 10" />
+          <input value={form.issue} onChange={(event) => { setForm({ ...form, issue: event.target.value }); setFormError(""); }} placeholder="호 예: 3" />
           <input disabled={form.type === "earn"} value={form.type === "earn" ? REVIEW_MILEAGE : form.amount} onChange={(event) => setForm({ ...form, amount: event.target.value.replace(/\D/g, "") })} placeholder="마일리지" />
         </div>
-        <input value={form.paperTitle} onChange={(event) => setForm({ ...form, paperTitle: event.target.value })} placeholder="논문 제목" />
+        <input value={form.paperTitle} onChange={(event) => { setForm({ ...form, paperTitle: event.target.value }); setFormError(""); }} placeholder="논문 제목" />
+        {formError && <div className="alert error field-alert">{formError}</div>}
         <textarea className="memo-small" maxLength={500} value={form.note} onChange={(event) => setForm({ ...form, note: event.target.value })} placeholder="메모" />
         <small className="char-count">{form.note.length}/500자</small>
         <div className="actions centered-actions">
@@ -1140,14 +1193,39 @@ function PwAdmin({ data, resolvePwRequest }) {
   );
 }
 
+function AdminPasswordPanel({ updateAdminPassword, loading }) {
+  const [form, setForm] = useState({ currentPassword: "", password: "", passwordConfirm: "" });
+  return (
+    <section className="panel">
+      <h2><KeyRound size={19} /> 관리자 비밀번호 변경</h2>
+      <div className="notice">관리자 로그인 ID는 kswa1997로 유지됩니다. 비밀번호는 영어와 숫자를 혼용한 8자리로 변경할 수 있습니다.</div>
+      <form className="form" onSubmit={async (event) => {
+        event.preventDefault();
+        const saved = await updateAdminPassword(form);
+        if (saved) setForm({ currentPassword: "", password: "", passwordConfirm: "" });
+      }}>
+        <PasswordField label="현재 관리자 비밀번호" value={form.currentPassword} onChange={(value) => setForm({ ...form, currentPassword: value })} placeholder="현재 비밀번호" />
+        <div className="two">
+          <PasswordField label="새 관리자 비밀번호" value={form.password} onChange={(value) => setForm({ ...form, password: value })} placeholder="새 비밀번호" />
+          <PasswordField label="새 관리자 비밀번호 확인" value={form.passwordConfirm} onChange={(value) => setForm({ ...form, passwordConfirm: value })} placeholder="새 비밀번호 확인" />
+        </div>
+        <div className="actions centered-actions">
+          <button className="primary" disabled={loading} type="submit"><Save size={16} /> 관리자 비밀번호 변경</button>
+        </div>
+      </form>
+    </section>
+  );
+}
+
 async function fetchRemoteData() {
-  const [members, signupRequests, mileageRecords, pwRequests, usageRequests, withdrawals] = await Promise.all([
+  const [members, signupRequests, mileageRecords, pwRequests, usageRequests, withdrawals, settings] = await Promise.all([
     fbGet("members"),
     fbGet("signupRequests"),
     fbGet("mileageRecords"),
     fbGet("pwRequests"),
     fbGet("usageRequests"),
     fbGet("withdrawals"),
+    fbGet("settings"),
   ]);
   return {
     members: toArray(members).sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""), "ko")),
@@ -1156,6 +1234,7 @@ async function fetchRemoteData() {
     pwRequests: toArray(pwRequests).sort(sortNewest),
     usageRequests: toArray(usageRequests).sort(sortNewest),
     withdrawals: toArray(withdrawals).sort(sortNewest),
+    settings: { ...DEFAULT_SETTINGS, ...(settings || {}) },
   };
 }
 
@@ -1230,7 +1309,8 @@ function firebaseErrorText(err, action) {
 }
 
 function readLocalData() {
-  return { ...EMPTY_DATA, ...readStorage(STORAGE.data, {}) };
+  const stored = readStorage(STORAGE.data, {});
+  return { ...EMPTY_DATA, ...stored, settings: { ...DEFAULT_SETTINGS, ...(stored.settings || {}) } };
 }
 
 function readStorage(key, fallback) {
@@ -1284,6 +1364,10 @@ function findPwMember(req, members) {
     if (byId) return byId;
   }
   return pickLatest(members.filter((item) => item.name === req.name && item.phone === req.phone));
+}
+
+function getAdminPassword(data) {
+  return data?.settings?.adminPassword || ADMIN_DEFAULT_PW;
 }
 
 function mileageSummary(memberId, records) {
