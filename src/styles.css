@@ -193,6 +193,12 @@ button {
   background: #fff;
 }
 
+.muted-count {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 900;
+}
+
 .session {
   justify-content: flex-end;
   font-weight: 900;

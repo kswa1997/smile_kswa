@@ -386,6 +386,42 @@ function App() {
     updateData({ ...dataRef.current, mileageRecords: dataRef.current.mileageRecords.filter((item) => item.id !== record.id) });
   }
 
+  async function deleteHistoryRecords(kind, records) {
+    const items = Array.isArray(records) ? records : [records];
+    const targets = items.filter(Boolean);
+    if (targets.length === 0) return;
+
+    const config = {
+      signup: { collection: "signupRequests", stateKey: "signupRequests", label: "가입 승인 기록", allowed: isAdmin },
+      usage: { collection: "usageRequests", stateKey: "usageRequests", label: "사용 요청 기록", allowed: canAdmin },
+      pw: { collection: "pwRequests", stateKey: "pwRequests", label: "비번 요청 기록", allowed: canAdmin },
+      mileageUse: { collection: "mileageRecords", stateKey: "mileageRecords", label: "마일리지 사용 기록", allowed: canAdmin },
+    }[kind];
+
+    if (!config?.allowed) return;
+    const mileageNotice = kind === "mileageUse" ? " 마일리지 사용 기록을 삭제하면 회원의 사용 총계와 현재 잔여 마일리지가 바뀝니다." : "";
+    if (!window.confirm(`${config.label} ${targets.length}건을 삭제할까요? 삭제 후 복구할 수 없습니다.${mileageNotice}`)) return;
+
+    setLoading(true);
+    try {
+      await Promise.all(targets.map((item) => fbDelete(`${config.collection}/${firebaseRecordKey(item, item.id)}`)));
+      const targetIds = new Set(targets.map((item) => item.id));
+      const targetKeys = new Set(targets.map((item) => firebaseRecordKey(item, item.id)));
+      updateData({
+        ...dataRef.current,
+        [config.stateKey]: dataRef.current[config.stateKey].filter((item) => (
+          !targetIds.has(item.id) && !targetKeys.has(firebaseRecordKey(item, item.id))
+        )),
+      });
+      setMessage(`${config.label} ${targets.length}건을 삭제했습니다.`);
+    } catch (err) {
+      console.error(err);
+      setError(firebaseErrorText(err, config.label));
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function submitUsageRequest(form) {
     clearAlerts();
     if (isAdmin || !sessionUser?.id) return false;
@@ -646,9 +682,9 @@ function App() {
           <strong>심사 Mileage</strong>
         </button>
         <nav>
-          <button className={page === "home" ? "active" : ""} type="button" onClick={() => setPage("home")}><BarChart3 size={17} /> 홈</button>
+          <button className={page === "home" ? "active" : ""} type="button" onClick={() => setPage("home")}><BarChart3 size={17} /> 전체 상황판</button>
           {!isAdmin && <button className={page === "profile" ? "active" : ""} type="button" onClick={() => setPage("profile")}><User size={17} /> 개인정보</button>}
-          {canAdmin && <button className={page === "admin" ? "active" : ""} type="button" onClick={() => setPage("admin")}><ShieldCheck size={17} /> 관리자<CountBadge count={pendingSignupCount + pendingPwCount + pendingUsageCount} /></button>}
+          {canAdmin && <button className={page === "admin" ? "active" : ""} type="button" onClick={() => setPage("admin")}><ShieldCheck size={17} /> 관리자 운영<CountBadge count={pendingSignupCount + pendingPwCount + pendingUsageCount} /></button>}
         </nav>
         <div className="session">
           <span>{isAdmin ? <><Crown className="admin-crown" size={24} /> 관리자</> : <>{sessionUser?.name}{isSubAdmin && <small><Crown size={13} /> 부관리자</small>}</>}</span>
@@ -678,6 +714,7 @@ function App() {
           rejectUsageRequest={rejectUsageRequest}
           resolvePwRequest={resolvePwRequest}
           updateAdminPassword={updateAdminPassword}
+          deleteHistoryRecords={deleteHistoryRecords}
           exportExcel={exportExcel}
           refresh={() => refreshData()}
         />
@@ -918,7 +955,7 @@ function UsageRequestList({ requests, showMember = false, actions }) {
             {request.note && <p>{request.note}</p>}
             <small>{formatDateTime(request.createdAt)}{request.reviewedAt ? ` · 처리 ${formatDateTime(request.reviewedAt)}` : ""}</small>
           </div>
-          {actions && request.status === "pending" && <span className="post-actions">{actions(request)}</span>}
+          {actions && <span className="post-actions">{actions(request)}</span>}
         </article>
       ))}
     </div>
@@ -995,6 +1032,12 @@ function AdminPage(props) {
   const pendingSignupCount = data.signupRequests.filter((item) => item.status === "pending").length;
   const pendingUsageCount = data.usageRequests.filter((item) => item.status === "pending").length;
   const pendingPwCount = data.pwRequests.filter((item) => item.status === "pending").length;
+  const historyCount = [
+    ...(isAdmin ? data.signupRequests.filter(isProcessed) : []),
+    ...data.usageRequests.filter(isProcessed),
+    ...data.pwRequests.filter(isProcessed),
+    ...data.mileageRecords.filter((item) => item.type === "use"),
+  ].length;
   return (
     <div className="stack">
       <section className="toolbar">
@@ -1010,6 +1053,7 @@ function AdminPage(props) {
         {isAdmin && <button className={tab === "signup" ? "active" : ""} type="button" onClick={() => setTab("signup")}>가입 승인<CountBadge count={pendingSignupCount} /></button>}
         <button className={tab === "usage" ? "active" : ""} type="button" onClick={() => setTab("usage")}>사용 요청<CountBadge count={pendingUsageCount} /></button>
         <button className={tab === "pw" ? "active" : ""} type="button" onClick={() => setTab("pw")}>비번 요청<CountBadge count={pendingPwCount} /></button>
+        <button className={tab === "history" ? "active" : ""} type="button" onClick={() => setTab("history")}>기록 관리<CountBadge count={historyCount} /></button>
         {isAdmin && <button className={tab === "adminPassword" ? "active" : ""} type="button" onClick={() => setTab("adminPassword")}>관리자 비번</button>}
       </div>
       {tab === "mileage" && <MileageAdmin {...props} />}
@@ -1017,6 +1061,7 @@ function AdminPage(props) {
       {tab === "signup" && isAdmin && <SignupAdmin {...props} />}
       {tab === "usage" && <UsageRequestsAdmin {...props} />}
       {tab === "pw" && <PwAdmin {...props} />}
+      {tab === "history" && <HistoryAdmin {...props} />}
       {tab === "adminPassword" && isAdmin && <AdminPasswordPanel {...props} />}
     </div>
   );
@@ -1137,12 +1182,13 @@ function MembersAdmin({ data, isAdmin, toggleSubAdmin, forceWithdraw }) {
 }
 
 function SignupAdmin({ data, approveSignup, rejectSignup }) {
-  const requests = data.signupRequests.sort(sortNewest);
+  const requests = data.signupRequests.filter((item) => item.status === "pending").sort(sortNewest);
   return (
     <section className="panel">
       <h2><UserPlus size={19} /> 가입 승인</h2>
+      <div className="notice">현재 승인 대기 중인 가입 신청만 표시됩니다. 승인·거부된 과거 기록은 기록 관리 탭에서 확인할 수 있습니다.</div>
       <div className="cards">
-        {requests.length === 0 ? <p className="empty">가입 신청이 없습니다.</p> : requests.map((req) => (
+        {requests.length === 0 ? <p className="empty">승인 대기 중인 가입 신청이 없습니다.</p> : requests.map((req) => (
           <article className="post member-row" key={req.id}>
             <div>
               <strong>{req.name} · {statusText(req.status)}</strong>
@@ -1163,11 +1209,11 @@ function SignupAdmin({ data, approveSignup, rejectSignup }) {
 }
 
 function UsageRequestsAdmin({ data, approveUsageRequest, rejectUsageRequest }) {
-  const requests = data.usageRequests.sort(sortNewest);
+  const requests = data.usageRequests.filter((item) => item.status === "pending").sort(sortNewest);
   return (
     <section className="panel">
       <h2><CheckCircle2 size={19} /> 마일리지 사용 요청</h2>
-      <div className="notice">승인하면 해당 사용 요청이 회원의 마일리지 사용 기록으로 자동 등록됩니다.</div>
+      <div className="notice">현재 승인 대기 중인 사용 요청만 표시됩니다. 승인하면 해당 사용 요청이 회원의 마일리지 사용 기록으로 자동 등록됩니다.</div>
       <UsageRequestList
         requests={requests}
         showMember
@@ -1183,11 +1229,13 @@ function UsageRequestsAdmin({ data, approveUsageRequest, rejectUsageRequest }) {
 }
 
 function PwAdmin({ data, resolvePwRequest }) {
+  const requests = data.pwRequests.filter((item) => item.status === "pending").sort(sortNewest);
   return (
     <section className="panel">
       <h2><KeyRound size={19} /> 비밀번호 요청</h2>
+      <div className="notice">현재 처리 대기 중인 비밀번호 요청만 표시됩니다. 처리 완료된 기록은 기록 관리 탭에서 확인할 수 있습니다.</div>
       <div className="cards">
-        {data.pwRequests.length === 0 ? <p className="empty">비밀번호 요청이 없습니다.</p> : data.pwRequests.sort(sortNewest).map((req) => {
+        {requests.length === 0 ? <p className="empty">처리 대기 중인 비밀번호 요청이 없습니다.</p> : requests.map((req) => {
           const member = findPwMember(req, data.members);
           const password = member?.password || req.resolvedPassword || "확인 불가";
           return (
@@ -1204,6 +1252,125 @@ function PwAdmin({ data, resolvePwRequest }) {
           );
         })}
       </div>
+    </section>
+  );
+}
+
+function HistoryAdmin({ data, isAdmin, deleteHistoryRecords }) {
+  const signupHistory = data.signupRequests.filter(isProcessed).sort(sortNewest);
+  const usageHistory = data.usageRequests.filter(isProcessed).sort(sortNewest);
+  const pwHistory = data.pwRequests.filter(isProcessed).sort(sortNewest);
+  const mileageUseHistory = data.mileageRecords.filter((item) => item.type === "use").sort(sortNewest);
+
+  return (
+    <div className="stack">
+      <section className="panel">
+        <h2><FileSpreadsheet size={19} /> 기록 관리</h2>
+        <div className="notice">승인·거부·처리 완료된 과거 기록을 보존해서 확인하는 곳입니다. 현재 업무 탭에는 대기 중인 항목만 표시됩니다.</div>
+      </section>
+
+      {isAdmin && (
+        <HistorySection
+          title="가입 승인 기록"
+          items={signupHistory}
+          emptyText="가입 승인 과거 기록이 없습니다."
+          onClear={() => deleteHistoryRecords("signup", signupHistory)}
+        >
+          {signupHistory.map((req) => (
+            <article className="post member-row" key={req.id}>
+              <div>
+                <strong>{req.name} · {statusText(req.status)}</strong>
+                <p>{req.affiliation} · {req.phone}</p>
+                <small>신청 {formatDateTime(req.requestedAt)}{req.reviewedAt ? ` · 처리 ${formatDateTime(req.reviewedAt)}` : ""}</small>
+              </div>
+              <span className="post-actions">
+                <button type="button" onClick={() => deleteHistoryRecords("signup", req)}><Trash2 size={15} /> 삭제</button>
+              </span>
+            </article>
+          ))}
+        </HistorySection>
+      )}
+
+      <HistorySection
+        title="사용 요청 기록"
+        items={usageHistory}
+        emptyText="사용 요청 과거 기록이 없습니다."
+        onClear={() => deleteHistoryRecords("usage", usageHistory)}
+      >
+        {usageHistory.map((request) => (
+          <article className="post member-row" key={request.id}>
+            <div>
+              <strong>{request.memberName} · {won(request.amount)} 마일리지 · {statusText(request.status)}</strong>
+              <p>{request.memberAffiliation} · {request.memberPhone}</p>
+              {request.note && <p>{request.note}</p>}
+              <small>요청 {formatDateTime(request.createdAt)}{request.reviewedAt ? ` · 처리 ${formatDateTime(request.reviewedAt)}` : ""}</small>
+            </div>
+            <span className="post-actions">
+              <button type="button" onClick={() => deleteHistoryRecords("usage", request)}><Trash2 size={15} /> 삭제</button>
+            </span>
+          </article>
+        ))}
+      </HistorySection>
+
+      <HistorySection
+        title="비번 요청 기록"
+        items={pwHistory}
+        emptyText="비번 요청 과거 기록이 없습니다."
+        onClear={() => deleteHistoryRecords("pw", pwHistory)}
+      >
+        {pwHistory.map((req) => {
+          const member = findPwMember(req, data.members);
+          const password = member?.password || req.resolvedPassword || "확인 불가";
+          return (
+            <article className="post member-row" key={req.id}>
+              <div>
+                <strong>{req.name} · {statusText(req.status)}</strong>
+                <p>전화번호: {req.phone}</p>
+                <p>관리자 확인 비밀번호: <strong>{password}</strong></p>
+                {req.message && <p>요청 메시지: {req.message}</p>}
+                <small>요청 {formatDateTime(req.createdAt)}{req.resolvedAt ? ` · 처리 ${formatDateTime(req.resolvedAt)}` : ""}</small>
+              </div>
+              <span className="post-actions">
+                <button type="button" onClick={() => deleteHistoryRecords("pw", req)}><Trash2 size={15} /> 삭제</button>
+              </span>
+            </article>
+          );
+        })}
+      </HistorySection>
+
+      <HistorySection
+        title="마일리지 사용 기록"
+        items={mileageUseHistory}
+        emptyText="마일리지 사용 과거 기록이 없습니다."
+        onClear={() => deleteHistoryRecords("mileageUse", mileageUseHistory)}
+      >
+        {mileageUseHistory.map((record) => (
+          <article className="post member-row" key={record.id}>
+            <div>
+              <strong>{record.memberName} · {recordText(record)}</strong>
+              {record.paperTitle && <p>논문 제목: {record.paperTitle}</p>}
+              <p>{record.memberAffiliation} · {record.memberPhone}</p>
+              {record.note && <p>{record.note}</p>}
+              <small>{formatDateTime(record.createdAt)} · {record.editorName}</small>
+            </div>
+            <span className="post-actions">
+              <button type="button" onClick={() => deleteHistoryRecords("mileageUse", record)}><Trash2 size={15} /> 삭제</button>
+            </span>
+          </article>
+        ))}
+      </HistorySection>
+    </div>
+  );
+}
+
+function HistorySection({ title, items, emptyText, onClear, children }) {
+  return (
+    <section className="panel">
+      <div className="toolbar slim">
+        <h2>{title} <span className="muted-count">{items.length}건</span></h2>
+        <button disabled={items.length === 0} type="button" onClick={onClear}><Trash2 size={15} /> 표시 기록 모두 삭제</button>
+      </div>
+      {items.length === 0 ? <p className="empty">{emptyText}</p> : <div className="cards">{children}</div>}
     </section>
   );
 }
@@ -1371,6 +1538,10 @@ function upsertById(items, item) {
 
 function isSubAdminMember(member) {
   return member?.role === "subAdmin";
+}
+
+function isProcessed(item) {
+  return item?.status && item.status !== "pending";
 }
 
 function findPwMember(req, members) {
