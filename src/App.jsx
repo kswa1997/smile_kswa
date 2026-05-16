@@ -883,7 +883,6 @@ function HomePage({ user, data, isAdmin, canAdmin, refresh, loading, submitUsage
             <h2>전체 마일리지 현황</h2>
             <button type="button" onClick={refresh}><RefreshCw size={16} /> {loading ? "불러오는 중" : "새로고침"}</button>
           </div>
-          <div className="notice">최대 120만 마일리지까지 적립할 수 있음.</div>
           <div className="metrics">
             <Metric label="적립 마일리지" value={won(summary.earned)} />
             <Metric label="사용 마일리지" value={won(summary.used)} />
@@ -915,7 +914,6 @@ function MileageDetail({ member, summary, records, refresh, loading }) {
         <h2><FileSpreadsheet size={19} /> {member.name}님의 심사 마일리지</h2>
         <button type="button" onClick={refresh}><RefreshCw size={16} /> {loading ? "불러오는 중" : "새로고침"}</button>
       </div>
-      <div className="notice">최대 120만 마일리지까지 적립할 수 있음.</div>
       <div className="metrics">
         <Metric label="적립 마일리지" value={won(summary.earned)} />
         <Metric label="사용 마일리지" value={won(summary.used)} />
