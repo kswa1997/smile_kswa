@@ -715,7 +715,7 @@ function App() {
     <main className="app">
       <header className="topbar">
         <button className="brand" type="button" onClick={() => setPage("home")}>
-          <span>Smile of KSWA</span>
+          <span>SmileAge: Smile of KSWA</span>
           <strong>심사 Mileage</strong>
         </button>
         <nav>
@@ -767,7 +767,7 @@ function AuthScreen({ mode, setMode, login, register, submitPwRequest, loading, 
     <main className="auth">
       <section className="auth-card">
         <img src="/assets/kswa-main.png" alt="한국사회복지행정학회" />
-        <h1>Smile of KSWA</h1>
+        <h1>SmileAge: Smile of KSWA</h1>
         <p>한국사회복지행정학 심사 Mileage</p>
         <p className="contact-note">학회 마일리지와 웹 운영에 관한 질문과 요청은 학회(편집간사)에 연락을 주시기를 바랍니다(www.koweladmin.or.kr).</p>
         <div className="notice">비밀번호는 <strong>영어와 숫자를 혼용한 8자리</strong>입니다. 예: <strong>a1234567</strong></div>
@@ -886,7 +886,7 @@ function HomePage({ user, data, isAdmin, canAdmin, refresh, loading, submitUsage
         <img src="/assets/kswa-main.png" alt="한국사회복지행정학회" />
         <div>
           <p>Academy of Korean Social Welfare Administration</p>
-          <h1>Smile of KSWA</h1>
+          <h1>SmileAge: Smile of KSWA</h1>
           <strong>한국사회복지행정학 심사 Mileage</strong>
         </div>
       </section>
