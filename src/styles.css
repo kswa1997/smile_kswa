@@ -564,6 +564,11 @@ textarea {
   padding-left: 18px;
 }
 
+.history-section.unread,
+.post.unread {
+  cursor: pointer;
+}
+
 .empty {
   color: var(--muted);
 }

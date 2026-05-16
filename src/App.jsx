@@ -45,6 +45,7 @@ const STORAGE = {
   user: "smile_user",
   admin: "smile_admin",
   data: "smile_data",
+  historySeen: "smile_history_seen",
 };
 
 const EMPTY_DATA = {
@@ -65,6 +66,10 @@ function App() {
   const [page, setPage] = useState(user ? "home" : "auth");
   const [authMode, setAuthMode] = useState("login");
   const [adminTab, setAdminTab] = useState("mileage");
+  const [viewedHistoryKeys, setViewedHistoryKeys] = useState(() => {
+    const stored = readStorage(STORAGE.historySeen, []);
+    return Array.isArray(stored) ? stored : [];
+  });
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -75,6 +80,17 @@ function App() {
     dataRef.current = next;
     setData(next);
     writeStorage(STORAGE.data, next);
+  }
+
+  function markHistoryRecordsViewed(kind, records) {
+    const items = Array.isArray(records) ? records : [records];
+    const keys = items.filter(Boolean).map((item) => historyRecordKey(kind, item));
+    if (keys.length === 0) return;
+    setViewedHistoryKeys((prev) => {
+      const next = [...new Set([...prev, ...keys])];
+      writeStorage(STORAGE.historySeen, next);
+      return next;
+    });
   }
 
   const sessionUser = useMemo(() => {
@@ -734,6 +750,8 @@ function App() {
           resolvePwRequest={resolvePwRequest}
           updateAdminPassword={updateAdminPassword}
           deleteHistoryRecords={deleteHistoryRecords}
+          viewedHistoryKeys={viewedHistoryKeys}
+          markHistoryRecordsViewed={markHistoryRecordsViewed}
           exportExcel={exportExcel}
           refresh={() => refreshData()}
         />
@@ -1045,16 +1063,12 @@ function AdminSummary({ data }) {
 }
 
 function AdminPage(props) {
-  const { data, tab, setTab, isAdmin, loading, exportExcel, refresh } = props;
+  const { data, tab, setTab, isAdmin, loading, exportExcel, refresh, viewedHistoryKeys } = props;
   const pendingSignupCount = data.signupRequests.filter((item) => item.status === "pending").length;
   const pendingUsageCount = data.usageRequests.filter((item) => item.status === "pending").length;
   const pendingPwCount = data.pwRequests.filter((item) => item.status === "pending").length;
-  const historyCount = [
-    ...(isAdmin ? data.signupRequests.filter(isProcessed) : []),
-    ...data.usageRequests.filter(isProcessed),
-    ...data.pwRequests.filter(isProcessed),
-    ...data.mileageRecords.filter((item) => item.type === "use"),
-  ].length + data.deletionLogs.length;
+  const seenKeys = new Set(viewedHistoryKeys);
+  const historyCount = historyNotificationRecords(data, isAdmin).filter(({ kind, record }) => !seenKeys.has(historyRecordKey(kind, record))).length;
   return (
     <div className="stack">
       <section className="toolbar">
@@ -1070,7 +1084,7 @@ function AdminPage(props) {
         {isAdmin && <button className={tab === "signup" ? "active" : ""} type="button" onClick={() => setTab("signup")}>가입 승인<CountBadge count={pendingSignupCount} /></button>}
         <button className={tab === "usage" ? "active" : ""} type="button" onClick={() => setTab("usage")}>사용 요청<CountBadge count={pendingUsageCount} /></button>
         <button className={tab === "pw" ? "active" : ""} type="button" onClick={() => setTab("pw")}>비번 요청<CountBadge count={pendingPwCount} /></button>
-        <button className={tab === "history" ? "active" : ""} type="button" onClick={() => setTab("history")}>기록 관리<CountBadge count={historyCount} /></button>
+        <button className={`${tab === "history" ? "active" : ""}${historyCount > 0 ? " has-unread" : ""}`} type="button" onClick={() => setTab("history")}>기록 관리<CountBadge count={historyCount} /></button>
         {isAdmin && <button className={tab === "adminPassword" ? "active" : ""} type="button" onClick={() => setTab("adminPassword")}>관리자 비번</button>}
       </div>
       {tab === "mileage" && <MileageAdmin {...props} />}
@@ -1273,15 +1287,28 @@ function PwAdmin({ data, resolvePwRequest }) {
   );
 }
 
-function HistoryAdmin({ data, isAdmin, deleteHistoryRecords, loading }) {
-  const signupHistory = data.signupRequests.filter(isProcessed).sort(sortNewest);
-  const usageHistory = data.usageRequests.filter(isProcessed).sort(sortNewest);
-  const pwHistory = data.pwRequests.filter(isProcessed).sort(sortNewest);
-  const mileageUseHistory = data.mileageRecords.filter((item) => item.type === "use").sort(sortNewest);
+function HistoryAdmin({ data, isAdmin, deleteHistoryRecords, loading, viewedHistoryKeys, markHistoryRecordsViewed }) {
+  const signupHistory = [...data.signupRequests].filter(isProcessed).sort(sortNewest);
+  const usageHistory = [...data.usageRequests].filter(isProcessed).sort(sortNewest);
+  const pwHistory = [...data.pwRequests].filter(isProcessed).sort(sortNewest);
+  const mileageUseHistory = [...data.mileageRecords].filter((item) => item.type === "use").sort(sortNewest);
   const deletionLogs = [...data.deletionLogs].sort(sortNewest);
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [deleteForm, setDeleteForm] = useState({ password: "", reason: "" });
   const [deleteError, setDeleteError] = useState("");
+  const seenKeys = new Set(viewedHistoryKeys);
+
+  function isViewed(kind, record) {
+    return seenKeys.has(historyRecordKey(kind, record));
+  }
+
+  function hasUnread(kind, records) {
+    return records.some((record) => !isViewed(kind, record));
+  }
+
+  function markViewed(kind, records) {
+    markHistoryRecordsViewed(kind, records);
+  }
 
   function openDelete(kind, records, label) {
     const items = Array.isArray(records) ? records.filter(Boolean) : [records].filter(Boolean);
@@ -1320,17 +1347,19 @@ function HistoryAdmin({ data, isAdmin, deleteHistoryRecords, loading }) {
           title="가입 승인 기록"
           items={signupHistory}
           emptyText="가입 승인 과거 기록이 없습니다."
+          hasUnread={hasUnread("signup", signupHistory)}
+          onMarkViewed={() => markViewed("signup", signupHistory)}
           onClear={() => openDelete("signup", signupHistory, "가입 승인 기록 전체")}
         >
           {signupHistory.map((req) => (
-            <article className="post member-row" key={req.id}>
+            <article className={`post member-row${isViewed("signup", req) ? "" : " unread"}`} key={req.id} onClick={(event) => { event.stopPropagation(); markViewed("signup", req); }}>
               <div>
                 <strong>{req.name} · {statusText(req.status)}</strong>
                 <p>{req.affiliation} · {req.phone}</p>
                 <small>신청 {formatDateTime(req.requestedAt)}{req.reviewedAt ? ` · 처리 ${formatDateTime(req.reviewedAt)}` : ""}</small>
               </div>
               <span className="post-actions">
-                <button type="button" onClick={() => openDelete("signup", req, `${req.name} 가입 승인 기록`)}><Trash2 size={15} /> 삭제</button>
+                <button type="button" onClick={(event) => { event.stopPropagation(); openDelete("signup", req, `${req.name} 가입 승인 기록`); }}><Trash2 size={15} /> 삭제</button>
               </span>
             </article>
           ))}
@@ -1341,10 +1370,12 @@ function HistoryAdmin({ data, isAdmin, deleteHistoryRecords, loading }) {
         title="사용 요청 기록"
         items={usageHistory}
         emptyText="사용 요청 과거 기록이 없습니다."
+        hasUnread={hasUnread("usage", usageHistory)}
+        onMarkViewed={() => markViewed("usage", usageHistory)}
         onClear={() => openDelete("usage", usageHistory, "사용 요청 기록 전체")}
       >
         {usageHistory.map((request) => (
-          <article className="post member-row" key={request.id}>
+          <article className={`post member-row${isViewed("usage", request) ? "" : " unread"}`} key={request.id} onClick={(event) => { event.stopPropagation(); markViewed("usage", request); }}>
             <div>
               <strong>{request.memberName} · {won(request.amount)} 마일리지 · {statusText(request.status)}</strong>
               <p>{request.memberAffiliation} · {request.memberPhone}</p>
@@ -1352,7 +1383,7 @@ function HistoryAdmin({ data, isAdmin, deleteHistoryRecords, loading }) {
               <small>요청 {formatDateTime(request.createdAt)}{request.reviewedAt ? ` · 처리 ${formatDateTime(request.reviewedAt)}` : ""}</small>
             </div>
             <span className="post-actions">
-              <button type="button" onClick={() => openDelete("usage", request, `${request.memberName} 사용 요청 기록`)}><Trash2 size={15} /> 삭제</button>
+              <button type="button" onClick={(event) => { event.stopPropagation(); openDelete("usage", request, `${request.memberName} 사용 요청 기록`); }}><Trash2 size={15} /> 삭제</button>
             </span>
           </article>
         ))}
@@ -1362,13 +1393,15 @@ function HistoryAdmin({ data, isAdmin, deleteHistoryRecords, loading }) {
         title="비번 요청 기록"
         items={pwHistory}
         emptyText="비번 요청 과거 기록이 없습니다."
+        hasUnread={hasUnread("pw", pwHistory)}
+        onMarkViewed={() => markViewed("pw", pwHistory)}
         onClear={() => openDelete("pw", pwHistory, "비번 요청 기록 전체")}
       >
         {pwHistory.map((req) => {
           const member = findPwMember(req, data.members);
           const password = member?.password || req.resolvedPassword || "확인 불가";
           return (
-            <article className="post member-row" key={req.id}>
+            <article className={`post member-row${isViewed("pw", req) ? "" : " unread"}`} key={req.id} onClick={(event) => { event.stopPropagation(); markViewed("pw", req); }}>
               <div>
                 <strong>{req.name} · {statusText(req.status)}</strong>
                 <p>전화번호: {req.phone}</p>
@@ -1377,7 +1410,7 @@ function HistoryAdmin({ data, isAdmin, deleteHistoryRecords, loading }) {
                 <small>요청 {formatDateTime(req.createdAt)}{req.resolvedAt ? ` · 처리 ${formatDateTime(req.resolvedAt)}` : ""}</small>
               </div>
               <span className="post-actions">
-                <button type="button" onClick={() => openDelete("pw", req, `${req.name} 비번 요청 기록`)}><Trash2 size={15} /> 삭제</button>
+                <button type="button" onClick={(event) => { event.stopPropagation(); openDelete("pw", req, `${req.name} 비번 요청 기록`); }}><Trash2 size={15} /> 삭제</button>
               </span>
             </article>
           );
@@ -1388,10 +1421,12 @@ function HistoryAdmin({ data, isAdmin, deleteHistoryRecords, loading }) {
         title="마일리지 사용 기록"
         items={mileageUseHistory}
         emptyText="마일리지 사용 과거 기록이 없습니다."
+        hasUnread={hasUnread("mileageUse", mileageUseHistory)}
+        onMarkViewed={() => markViewed("mileageUse", mileageUseHistory)}
         onClear={() => openDelete("mileageUse", mileageUseHistory, "마일리지 사용 기록 전체")}
       >
         {mileageUseHistory.map((record) => (
-          <article className="post member-row" key={record.id}>
+          <article className={`post member-row${isViewed("mileageUse", record) ? "" : " unread"}`} key={record.id} onClick={(event) => { event.stopPropagation(); markViewed("mileageUse", record); }}>
             <div>
               <strong>{record.memberName} · {recordText(record)}</strong>
               {record.paperTitle && <p>논문 제목: {record.paperTitle}</p>}
@@ -1400,7 +1435,7 @@ function HistoryAdmin({ data, isAdmin, deleteHistoryRecords, loading }) {
               <small>{formatDateTime(record.createdAt)} · {record.editorName}</small>
             </div>
             <span className="post-actions">
-              <button type="button" onClick={() => openDelete("mileageUse", record, `${record.memberName} 마일리지 사용 기록`)}><Trash2 size={15} /> 삭제</button>
+              <button type="button" onClick={(event) => { event.stopPropagation(); openDelete("mileageUse", record, `${record.memberName} 마일리지 사용 기록`); }}><Trash2 size={15} /> 삭제</button>
             </span>
           </article>
         ))}
@@ -1448,12 +1483,12 @@ function HistoryAdmin({ data, isAdmin, deleteHistoryRecords, loading }) {
   );
 }
 
-function HistorySection({ title, items, emptyText, onClear, children }) {
+function HistorySection({ title, items, emptyText, hasUnread = false, onMarkViewed, onClear, children }) {
   return (
-    <section className="panel">
+    <section className={`panel history-section${hasUnread ? " unread" : ""}`} onClick={hasUnread ? onMarkViewed : undefined}>
       <div className="toolbar slim">
         <h2>{title} <span className="muted-count">{items.length}건</span></h2>
-        <button disabled={items.length === 0} type="button" onClick={onClear}><Trash2 size={15} /> 표시 기록 모두 삭제</button>
+        <button disabled={items.length === 0} type="button" onClick={(event) => { event.stopPropagation(); onClear(); }}><Trash2 size={15} /> 표시 기록 모두 삭제</button>
       </div>
       {items.length === 0 ? <p className="empty">{emptyText}</p> : <div className="cards">{children}</div>}
     </section>
@@ -1654,6 +1689,19 @@ function isSubAdminMember(member) {
 
 function isProcessed(item) {
   return item?.status && item.status !== "pending";
+}
+
+function historyNotificationRecords(data, isAdmin) {
+  return [
+    ...(isAdmin ? data.signupRequests.filter(isProcessed).map((record) => ({ kind: "signup", record })) : []),
+    ...data.usageRequests.filter(isProcessed).map((record) => ({ kind: "usage", record })),
+    ...data.pwRequests.filter(isProcessed).map((record) => ({ kind: "pw", record })),
+    ...data.mileageRecords.filter((record) => record.type === "use").map((record) => ({ kind: "mileageUse", record })),
+  ];
+}
+
+function historyRecordKey(kind, record) {
+  return `${kind}:${firebaseRecordKey(record, record?.id || record?.createdAt || record?.requestedAt || record?.reviewedAt || "")}`;
 }
 
 function deletionRecordSummary(kind, item) {
