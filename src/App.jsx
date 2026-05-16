@@ -197,7 +197,7 @@ function App() {
     const trimmed = {
       name: form.name.trim(),
       affiliation: form.affiliation.trim(),
-      phone: form.phone.trim(),
+      phone: formatPhoneNumber(form.phone),
       password: form.password.trim(),
     };
     if (!trimmed.name || !trimmed.affiliation || !trimmed.phone) {
@@ -215,8 +215,8 @@ function App() {
     setLoading(true);
     try {
       const remote = await fetchSignupContext();
-      const duplicateMember = remote.members.some((item) => item.name === trimmed.name && item.phone === trimmed.phone);
-      const duplicateRequest = remote.signupRequests.some((item) => item.status === "pending" && item.name === trimmed.name && item.phone === trimmed.phone);
+      const duplicateMember = remote.members.some((item) => item.name === trimmed.name && samePhone(item.phone, trimmed.phone));
+      const duplicateRequest = remote.signupRequests.some((item) => item.status === "pending" && item.name === trimmed.name && samePhone(item.phone, trimmed.phone));
       if (duplicateMember || duplicateRequest) {
         setError("이미 등록되었거나 승인 대기 중인 가입 신청이 있습니다.");
         return;
@@ -244,19 +244,20 @@ function App() {
 
   async function submitPwRequest(form) {
     clearAlerts();
-    if (!form.name.trim() || !form.phone.trim()) {
+    const phone = formatPhoneNumber(form.phone);
+    if (!form.name.trim() || !phone) {
       setError("이름과 전화번호를 입력해주세요.");
       return;
     }
     setLoading(true);
     try {
       const remote = await fetchRemoteData();
-      const member = pickLatest(remote.members.filter((item) => item.name === form.name.trim() && item.phone === form.phone.trim()));
+      const member = pickLatest(remote.members.filter((item) => item.name === form.name.trim() && samePhone(item.phone, phone)));
       if (!member) {
         setError("요청하신 이름과 전화번호가 없습니다. 가입여부를 확인해주세요.");
         return;
       }
-      const exists = remote.pwRequests.some((item) => item.status === "pending" && item.name === form.name.trim() && item.phone === form.phone.trim());
+      const exists = remote.pwRequests.some((item) => item.status === "pending" && item.name === form.name.trim() && samePhone(item.phone, phone));
       if (exists) {
         setError("이미 처리 대기 중인 비밀번호 요청이 있습니다.");
         return;
@@ -265,7 +266,7 @@ function App() {
         id: makeId("pw"),
         memberId: member.id,
         name: form.name.trim(),
-        phone: form.phone.trim(),
+        phone,
         message: form.message.trim(),
         resolvedPassword: member.password || "",
         status: "pending",
@@ -289,7 +290,7 @@ function App() {
       id: makeId("member"),
       name: req.name,
       affiliation: req.affiliation,
-      phone: req.phone,
+      phone: formatPhoneNumber(req.phone),
       password: req.password,
       role: "member",
       joinedAt: now(),
@@ -331,7 +332,7 @@ function App() {
       memberId: member.id,
       name: member.name,
       affiliation: member.affiliation,
-      phone: member.phone,
+      phone: formatPhoneNumber(member.phone),
       withdrawnAt: now(),
       withdrawnBy: "관리자",
     };
@@ -382,7 +383,7 @@ function App() {
       memberId: member.id,
       memberName: member.name,
       memberAffiliation: member.affiliation,
-      memberPhone: member.phone,
+      memberPhone: formatPhoneNumber(member.phone),
       type: form.type,
       amount,
       volume,
@@ -479,7 +480,7 @@ function App() {
         memberId: sessionUser.id,
         memberName: sessionUser.name,
         memberAffiliation: sessionUser.affiliation,
-        memberPhone: sessionUser.phone,
+        memberPhone: formatPhoneNumber(sessionUser.phone),
         amount,
         note: form.note.trim(),
         status: "pending",
@@ -520,7 +521,7 @@ function App() {
         memberId: member.id,
         memberName: member.name,
         memberAffiliation: member.affiliation,
-        memberPhone: member.phone,
+        memberPhone: formatPhoneNumber(member.phone),
       type: "use",
       amount: Number(req.amount || 0),
       volume: "",
@@ -575,7 +576,7 @@ function App() {
     clearAlerts();
     if (isAdmin || !sessionUser?.id) return;
     const affiliation = form.affiliation.trim();
-    const phone = form.phone.trim();
+    const phone = formatPhoneNumber(form.phone);
     const password = form.password.trim();
     const passwordConfirm = form.passwordConfirm.trim();
     if (!affiliation || !phone) {
@@ -821,7 +822,7 @@ function RegisterForm({ register, loading }) {
     <form className="form" onSubmit={(event) => { event.preventDefault(); register(form); }}>
       <input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="이름" />
       <input value={form.affiliation} onChange={(event) => setForm({ ...form, affiliation: event.target.value })} placeholder="소속" />
-      <input value={form.phone} onChange={(event) => setForm({ ...form, phone: event.target.value })} placeholder="전화번호" />
+      <input value={form.phone} onChange={(event) => setForm({ ...form, phone: event.target.value })} onBlur={() => setForm({ ...form, phone: formatPhoneNumber(form.phone) })} placeholder="전화번호" />
       <div className="notice">비밀번호는 영어와 숫자를 혼용한 8자리입니다. 예: a1234567, 1234567b, abcdefg0</div>
       <div className="two">
         <PasswordField label="비밀번호" value={form.password} onChange={(value) => setForm({ ...form, password: value })} placeholder="비밀번호" />
@@ -837,7 +838,7 @@ function PwRequestForm({ submitPwRequest, loading }) {
   return (
     <form className="form" onSubmit={(event) => { event.preventDefault(); submitPwRequest(form); }}>
       <input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="이름" />
-      <input value={form.phone} onChange={(event) => setForm({ ...form, phone: event.target.value })} placeholder="전화번호" />
+      <input value={form.phone} onChange={(event) => setForm({ ...form, phone: event.target.value })} onBlur={() => setForm({ ...form, phone: formatPhoneNumber(form.phone) })} placeholder="전화번호" />
       <textarea value={form.message} onChange={(event) => setForm({ ...form, message: event.target.value })} placeholder="관리자에게 전달할 메시지" />
       <button className="primary" disabled={loading} type="submit"><KeyRound size={17} /> 비밀번호 요청</button>
     </form>
@@ -847,7 +848,7 @@ function PwRequestForm({ submitPwRequest, loading }) {
 function ProfilePage({ user, updateProfile, loading }) {
   const [form, setForm] = useState({
     affiliation: user?.affiliation || "",
-    phone: user?.phone || "",
+    phone: formatPhoneNumber(user?.phone),
     password: "",
     passwordConfirm: "",
   });
@@ -859,7 +860,7 @@ function ProfilePage({ user, updateProfile, loading }) {
         <label>이름<input value={user?.name || ""} disabled readOnly /></label>
         <div className="two">
           <label>소속<input value={form.affiliation} onChange={(event) => setForm({ ...form, affiliation: event.target.value })} placeholder="소속" /></label>
-          <label>전화번호<input value={form.phone} onChange={(event) => setForm({ ...form, phone: event.target.value })} placeholder="전화번호" /></label>
+          <label>전화번호<input value={form.phone} onChange={(event) => setForm({ ...form, phone: event.target.value })} onBlur={() => setForm({ ...form, phone: formatPhoneNumber(form.phone) })} placeholder="전화번호" /></label>
         </div>
         <div className="notice">비밀번호는 변경할 때만 입력해주세요. 영어와 숫자를 혼용한 8자리입니다.</div>
         <div className="two">
@@ -988,7 +989,7 @@ function UsageRequestList({ requests, showMember = false, actions }) {
         <article className="post member-row" key={request.id}>
           <div>
             <strong>{showMember ? `${request.memberName} · ` : ""}{won(request.amount)} 마일리지 · {statusText(request.status)}</strong>
-            {showMember && <p>{request.memberAffiliation} · {request.memberPhone}</p>}
+            {showMember && <p>{request.memberAffiliation} · {formatPhoneNumber(request.memberPhone)}</p>}
             {request.note && <p>{request.note}</p>}
             <small>{formatDateTime(request.createdAt)}{request.reviewedAt ? ` · 처리 ${formatDateTime(request.reviewedAt)}` : ""}</small>
           </div>
@@ -1141,7 +1142,7 @@ function MileageAdmin({ data, saveMileage, deleteMileage }) {
       }}>
         <div className="two">
           <select value={form.memberId} onChange={(event) => setForm({ ...form, memberId: event.target.value })}>
-            {data.members.map((member) => <option key={member.id} value={member.id}>{memberLabel(member)} · {member.affiliation} · {member.phone}</option>)}
+            {data.members.map((member) => <option key={member.id} value={member.id}>{memberLabel(member)} · {member.affiliation} · {formatPhoneNumber(member.phone)}</option>)}
           </select>
           <select value={form.type} onChange={(event) => setForm({ ...form, type: event.target.value, amount: event.target.value === "earn" ? REVIEW_MILEAGE : "" })}>
             <option value="earn">적립 30,000</option>
@@ -1149,7 +1150,7 @@ function MileageAdmin({ data, saveMileage, deleteMileage }) {
             <option value="deduct">차감/취소</option>
           </select>
         </div>
-        {selected && <div className="notice">선택 심사자: {selected.name} · {selected.affiliation} · {selected.phone} · 현재 {won(summary.balance)}</div>}
+        {selected && <div className="notice">선택 심사자: {selected.name} · {selected.affiliation} · {formatPhoneNumber(selected.phone)} · 현재 {won(summary.balance)}</div>}
         <div className="three">
           <input value={form.volume} onChange={(event) => { setForm({ ...form, volume: event.target.value }); setFormError(""); }} placeholder="권 예: 10" />
           <input value={form.issue} onChange={(event) => { setForm({ ...form, issue: event.target.value }); setFormError(""); }} placeholder="호 예: 3" />
@@ -1169,7 +1170,7 @@ function MileageAdmin({ data, saveMileage, deleteMileage }) {
           <article className="post" key={record.id}>
             <strong>{record.memberName} · {recordText(record)}</strong>
             {record.paperTitle && <p>논문 제목: {record.paperTitle}</p>}
-            <p>{record.memberAffiliation} · {record.memberPhone}</p>
+            <p>{record.memberAffiliation} · {formatPhoneNumber(record.memberPhone)}</p>
             <footer>
               <span>{formatDateTime(record.createdAt)} · {record.editorName}</span>
               <span className="post-actions">
@@ -1197,7 +1198,7 @@ function MembersAdmin({ data, isAdmin, toggleSubAdmin, forceWithdraw }) {
             <article className="post member-row" key={member.id}>
               <div>
                 <strong>{memberLabel(member)} {isSubAdminMember(member) && <span className="submark"><Crown size={13} /> 부관리자</span>}</strong>
-                <p>{member.affiliation} · {member.phone}</p>
+                <p>{member.affiliation} · {formatPhoneNumber(member.phone)}</p>
                 <small>현재 {won(summary.balance)} · 적립 {won(summary.earned)} · 사용 {won(summary.used)}</small>
               </div>
               {isAdmin && (
@@ -1225,7 +1226,7 @@ function SignupAdmin({ data, approveSignup, rejectSignup }) {
           <article className="post member-row" key={req.id}>
             <div>
               <strong>{req.name} · {statusText(req.status)}</strong>
-              <p>{req.affiliation} · {req.phone}</p>
+              <p>{req.affiliation} · {formatPhoneNumber(req.phone)}</p>
               <small>{formatDateTime(req.requestedAt)}</small>
             </div>
             {req.status === "pending" && (
@@ -1274,7 +1275,7 @@ function PwAdmin({ data, resolvePwRequest }) {
           return (
             <article className="post" key={req.id}>
               <strong>{req.name} · {statusText(req.status)}</strong>
-              <p>전화번호: {req.phone}</p>
+              <p>전화번호: {formatPhoneNumber(req.phone)}</p>
               <p>관리자 확인 비밀번호: <strong>{password}</strong></p>
               {req.message && <p>요청 메시지: {req.message}</p>}
               <footer>
@@ -1370,7 +1371,7 @@ function HistoryAdmin({ data, isAdmin, deleteHistoryRecords, loading, viewedHist
             <article className={`post member-row${isViewed("signup", req) ? "" : " unread"}`} key={req.id} onClick={(event) => { event.stopPropagation(); markViewed("signup", req); }}>
               <div>
                 <strong>{req.name} · {statusText(req.status)}</strong>
-                <p>{req.affiliation} · {req.phone}</p>
+                <p>{req.affiliation} · {formatPhoneNumber(req.phone)}</p>
                 <small>신청 {formatDateTime(req.requestedAt)}{req.reviewedAt ? ` · 처리 ${formatDateTime(req.reviewedAt)}` : ""}</small>
               </div>
               <span className="post-actions">
@@ -1393,7 +1394,7 @@ function HistoryAdmin({ data, isAdmin, deleteHistoryRecords, loading, viewedHist
           <article className={`post member-row${isViewed("usage", request) ? "" : " unread"}`} key={request.id} onClick={(event) => { event.stopPropagation(); markViewed("usage", request); }}>
             <div>
               <strong>{request.memberName} · {won(request.amount)} 마일리지 · {statusText(request.status)}</strong>
-              <p>{request.memberAffiliation} · {request.memberPhone}</p>
+              <p>{request.memberAffiliation} · {formatPhoneNumber(request.memberPhone)}</p>
               {request.note && <p>{request.note}</p>}
               <small>요청 {formatDateTime(request.createdAt)}{request.reviewedAt ? ` · 처리 ${formatDateTime(request.reviewedAt)}` : ""}</small>
             </div>
@@ -1419,7 +1420,7 @@ function HistoryAdmin({ data, isAdmin, deleteHistoryRecords, loading, viewedHist
             <article className={`post member-row${isViewed("pw", req) ? "" : " unread"}`} key={req.id} onClick={(event) => { event.stopPropagation(); markViewed("pw", req); }}>
               <div>
                 <strong>{req.name} · {statusText(req.status)}</strong>
-                <p>전화번호: {req.phone}</p>
+                <p>전화번호: {formatPhoneNumber(req.phone)}</p>
                 <p>관리자 확인 비밀번호: <strong>{password}</strong></p>
                 {req.message && <p>요청 메시지: {req.message}</p>}
                 <small>요청 {formatDateTime(req.createdAt)}{req.resolvedAt ? ` · 처리 ${formatDateTime(req.resolvedAt)}` : ""}</small>
@@ -1445,7 +1446,7 @@ function HistoryAdmin({ data, isAdmin, deleteHistoryRecords, loading, viewedHist
             <div>
               <strong>{record.memberName} · {recordText(record)}</strong>
               {record.paperTitle && <p>논문 제목: {record.paperTitle}</p>}
-              <p>{record.memberAffiliation} · {record.memberPhone}</p>
+              <p>{record.memberAffiliation} · {formatPhoneNumber(record.memberPhone)}</p>
               {record.note && <p>{record.note}</p>}
               <small>{formatDateTime(record.createdAt)} · {record.editorName}</small>
             </div>
@@ -1731,7 +1732,7 @@ function deletionRecordSummary(kind, item) {
       kind,
       name: item.name || "",
       affiliation: item.affiliation || "",
-      phone: item.phone || "",
+      phone: formatPhoneNumber(item.phone),
       requestedAt: item.requestedAt || "",
       reviewedAt: item.reviewedAt || "",
     };
@@ -1742,7 +1743,7 @@ function deletionRecordSummary(kind, item) {
       kind,
       memberName: item.memberName || "",
       memberAffiliation: item.memberAffiliation || "",
-      memberPhone: item.memberPhone || "",
+      memberPhone: formatPhoneNumber(item.memberPhone),
       amount: item.amount || 0,
       note: item.note || "",
       createdAt: item.createdAt || "",
@@ -1754,7 +1755,7 @@ function deletionRecordSummary(kind, item) {
       ...base,
       kind,
       name: item.name || "",
-      phone: item.phone || "",
+      phone: formatPhoneNumber(item.phone),
       message: item.message || "",
       createdAt: item.createdAt || "",
       resolvedAt: item.resolvedAt || "",
@@ -1765,7 +1766,7 @@ function deletionRecordSummary(kind, item) {
     kind,
     memberName: item.memberName || "",
     memberAffiliation: item.memberAffiliation || "",
-    memberPhone: item.memberPhone || "",
+    memberPhone: formatPhoneNumber(item.memberPhone),
     amount: item.amount || 0,
     volume: item.volume || "",
     issue: item.issue || "",
@@ -1776,9 +1777,9 @@ function deletionRecordSummary(kind, item) {
 }
 
 function deletionRecordText(record) {
-  if (record.kind === "signup") return `${record.name} · ${record.affiliation} · ${record.phone} · ${statusText(record.status)}`;
+  if (record.kind === "signup") return `${record.name} · ${record.affiliation} · ${formatPhoneNumber(record.phone)} · ${statusText(record.status)}`;
   if (record.kind === "usage") return `${record.memberName} · ${won(record.amount)} 마일리지 · ${statusText(record.status)}`;
-  if (record.kind === "pw") return `${record.name} · ${record.phone} · ${statusText(record.status)}`;
+  if (record.kind === "pw") return `${record.name} · ${formatPhoneNumber(record.phone)} · ${statusText(record.status)}`;
   return `${record.memberName} · 사용 ${won(record.amount)} 마일리지${record.paperTitle ? ` · ${record.paperTitle}` : ""}`;
 }
 
@@ -1787,11 +1788,33 @@ function findPwMember(req, members) {
     const byId = members.find((item) => item.id === req.memberId);
     if (byId) return byId;
   }
-  return pickLatest(members.filter((item) => item.name === req.name && item.phone === req.phone));
+  return pickLatest(members.filter((item) => item.name === req.name && samePhone(item.phone, req.phone)));
 }
 
 function getAdminPassword(data) {
   return data?.settings?.adminPassword || ADMIN_DEFAULT_PW;
+}
+
+function phoneDigits(value) {
+  return String(value || "").replace(/\D/g, "");
+}
+
+function formatPhoneNumber(value) {
+  const raw = String(value || "").trim();
+  const digits = phoneDigits(raw);
+  if (!digits) return raw;
+  if (digits.length === 11) return `${digits.slice(0, 3)}-${digits.slice(3, 7)}-${digits.slice(7)}`;
+  if (digits.length === 10) {
+    if (digits.startsWith("02")) return `02-${digits.slice(2, 6)}-${digits.slice(6)}`;
+    return `${digits.slice(0, 3)}-${digits.slice(3, 6)}-${digits.slice(6)}`;
+  }
+  return raw;
+}
+
+function samePhone(a, b) {
+  const left = phoneDigits(a);
+  const right = phoneDigits(b);
+  return Boolean(left && right && left === right);
 }
 
 function normalizePaperTitle(value) {
@@ -1879,11 +1902,11 @@ function formatDateTime(value) {
 
 function downloadExcel(data) {
   const sheets = [
-    { name: "회원", columns: ["이름", "소속", "전화번호", "권한", "비밀번호", "가입일"], rows: data.members.map((m) => [m.name, m.affiliation, m.phone, isSubAdminMember(m) ? "부관리자" : "회원", m.password, formatDateTime(m.joinedAt)]) },
-    { name: "마일리지", columns: ["회원", "소속", "전화번호", "구분", "금액", "권", "호", "논문제목", "메모", "입력자", "일시"], rows: data.mileageRecords.map((r) => [r.memberName, r.memberAffiliation, r.memberPhone, r.type, r.amount, r.volume, r.issue, r.paperTitle, r.note, r.editorName, formatDateTime(r.createdAt)]) },
-    { name: "사용요청", columns: ["회원", "소속", "전화번호", "금액", "상태", "메모", "요청일", "처리일", "처리자"], rows: data.usageRequests.map((r) => [r.memberName, r.memberAffiliation, r.memberPhone, r.amount, r.status, r.note, formatDateTime(r.createdAt), formatDateTime(r.reviewedAt), r.reviewedBy]) },
-    { name: "비번요청", columns: ["이름", "전화번호", "비밀번호", "상태", "메시지", "일시"], rows: data.pwRequests.map((r) => [r.name, r.phone, findPwMember(r, data.members)?.password || r.resolvedPassword, r.status, r.message, formatDateTime(r.createdAt)]) },
-    { name: "가입신청", columns: ["이름", "소속", "전화번호", "상태", "신청일"], rows: data.signupRequests.map((r) => [r.name, r.affiliation, r.phone, r.status, formatDateTime(r.requestedAt)]) },
+    { name: "회원", columns: ["이름", "소속", "전화번호", "권한", "비밀번호", "가입일"], rows: data.members.map((m) => [m.name, m.affiliation, formatPhoneNumber(m.phone), isSubAdminMember(m) ? "부관리자" : "회원", m.password, formatDateTime(m.joinedAt)]) },
+    { name: "마일리지", columns: ["회원", "소속", "전화번호", "구분", "금액", "권", "호", "논문제목", "메모", "입력자", "일시"], rows: data.mileageRecords.map((r) => [r.memberName, r.memberAffiliation, formatPhoneNumber(r.memberPhone), r.type, r.amount, r.volume, r.issue, r.paperTitle, r.note, r.editorName, formatDateTime(r.createdAt)]) },
+    { name: "사용요청", columns: ["회원", "소속", "전화번호", "금액", "상태", "메모", "요청일", "처리일", "처리자"], rows: data.usageRequests.map((r) => [r.memberName, r.memberAffiliation, formatPhoneNumber(r.memberPhone), r.amount, r.status, r.note, formatDateTime(r.createdAt), formatDateTime(r.reviewedAt), r.reviewedBy]) },
+    { name: "비번요청", columns: ["이름", "전화번호", "비밀번호", "상태", "메시지", "일시"], rows: data.pwRequests.map((r) => [r.name, formatPhoneNumber(r.phone), findPwMember(r, data.members)?.password || r.resolvedPassword, r.status, r.message, formatDateTime(r.createdAt)]) },
+    { name: "가입신청", columns: ["이름", "소속", "전화번호", "상태", "신청일"], rows: data.signupRequests.map((r) => [r.name, r.affiliation, formatPhoneNumber(r.phone), r.status, formatDateTime(r.requestedAt)]) },
     { name: "삭제이유", columns: ["기록구분", "삭제건수", "삭제이유", "삭제자", "삭제일", "삭제대상"], rows: data.deletionLogs.map((r) => [r.label, r.count, r.reason, r.deletedBy, formatDateTime(r.deletedAt), Array.isArray(r.deletedRecords) ? r.deletedRecords.map(deletionRecordText).join(" / ") : ""]) },
   ];
   const xml = `<?xml version="1.0" encoding="UTF-8"?><?mso-application progid="Excel.Sheet"?><Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">${sheets.map(sheetXml).join("")}</Workbook>`;
