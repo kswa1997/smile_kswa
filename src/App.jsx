@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   BarChart3,
@@ -87,6 +87,8 @@ function App() {
     const keys = items.filter(Boolean).map((item) => historyRecordKey(kind, item));
     if (keys.length === 0) return;
     setViewedHistoryKeys((prev) => {
+      const prevSet = new Set(prev);
+      if (keys.every((key) => prevSet.has(key))) return prev;
       const next = [...new Set([...prev, ...keys])];
       writeStorage(STORAGE.historySeen, next);
       return next;
@@ -1297,6 +1299,19 @@ function HistoryAdmin({ data, isAdmin, deleteHistoryRecords, loading, viewedHist
   const [deleteForm, setDeleteForm] = useState({ password: "", reason: "" });
   const [deleteError, setDeleteError] = useState("");
   const seenKeys = new Set(viewedHistoryKeys);
+  const visibleHistoryKeyText = [
+    ...(isAdmin ? signupHistory.map((record) => historyRecordKey("signup", record)) : []),
+    ...usageHistory.map((record) => historyRecordKey("usage", record)),
+    ...pwHistory.map((record) => historyRecordKey("pw", record)),
+    ...mileageUseHistory.map((record) => historyRecordKey("mileageUse", record)),
+  ].join("|");
+
+  useEffect(() => {
+    if (isAdmin) markHistoryRecordsViewed("signup", signupHistory);
+    markHistoryRecordsViewed("usage", usageHistory);
+    markHistoryRecordsViewed("pw", pwHistory);
+    markHistoryRecordsViewed("mileageUse", mileageUseHistory);
+  }, [visibleHistoryKeyText, isAdmin]);
 
   function isViewed(kind, record) {
     return seenKeys.has(historyRecordKey(kind, record));
