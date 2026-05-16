@@ -885,8 +885,8 @@ function HomePage({ user, data, isAdmin, canAdmin, refresh, loading, submitUsage
       <section className="hero">
         <img src="/assets/kswa-main.png" alt="한국사회복지행정학회" />
         <div>
-          <p>Academy of Korean Social Welfare Administration</p>
           <h1>SmileAge: Smile of KSWA</h1>
+          <p>Academy of Korean Social Welfare Administration</p>
           <strong>한국사회복지행정학 심사 Mileage</strong>
         </div>
       </section>
