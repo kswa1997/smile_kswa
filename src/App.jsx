@@ -37,6 +37,7 @@ const REVIEW_MILEAGE = 30000;
 const MAX_MILEAGE = 1200000;
 const MIN_USE_MILEAGE = 100000;
 const PASSWORD_RULE = /^(?=.*[A-Za-z])(?=.*\d)[A-Za-z\d]{8}$/;
+const PRIVACY_CONSENT_VERSION = "2026-05-20";
 const DEFAULT_SETTINGS = {
   adminPassword: ADMIN_DEFAULT_PW,
 };
@@ -194,6 +195,10 @@ function App() {
 
   async function register(form) {
     clearAlerts();
+    if (!form.privacyConsent) {
+      setError("개인정보 수집과 이용에 동의해야 가입 신청을 할 수 있습니다.");
+      return;
+    }
     const trimmed = {
       name: form.name.trim(),
       affiliation: form.affiliation.trim(),
@@ -227,6 +232,9 @@ function App() {
         affiliation: trimmed.affiliation,
         phone: trimmed.phone,
         password: trimmed.password,
+        privacyConsent: true,
+        privacyConsentAt: now(),
+        privacyConsentVersion: PRIVACY_CONSENT_VERSION,
         status: "pending",
         requestedAt: now(),
       };
@@ -293,6 +301,9 @@ function App() {
       phone: formatPhoneNumber(req.phone),
       password: req.password,
       role: "member",
+      privacyConsent: Boolean(req.privacyConsent),
+      privacyConsentAt: req.privacyConsentAt || "",
+      privacyConsentVersion: req.privacyConsentVersion || "",
       joinedAt: now(),
       updatedAt: now(),
     };
@@ -817,7 +828,7 @@ function PasswordField({ label, value, onChange, placeholder }) {
 }
 
 function RegisterForm({ register, loading }) {
-  const [form, setForm] = useState({ name: "", affiliation: "", phone: "", password: "", passwordConfirm: "" });
+  const [form, setForm] = useState({ name: "", affiliation: "", phone: "", password: "", passwordConfirm: "", privacyConsent: false });
   return (
     <form className="form" onSubmit={(event) => { event.preventDefault(); register(form); }}>
       <input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="이름" />
@@ -828,7 +839,23 @@ function RegisterForm({ register, loading }) {
         <PasswordField label="비밀번호" value={form.password} onChange={(value) => setForm({ ...form, password: value })} placeholder="비밀번호" />
         <PasswordField label="비밀번호 확인" value={form.passwordConfirm} onChange={(value) => setForm({ ...form, passwordConfirm: value })} placeholder="비밀번호 확인" />
       </div>
-      <button className="primary" disabled={loading} type="submit"><UserPlus size={17} /> 가입 신청</button>
+      <section className="consent-box" aria-label="개인정보 수집과 이용에 대한 동의">
+        <h3>[개인정보 수집과 이용에 대한 동의]</h3>
+        <div className="consent-text">
+          <p>한국사회복지행정학회 스마일 마일리지 프로그램(이하 스마일리지)과 관련하여 개인정보 수집과 이용에 관한 동의를 받고자 합니다. 아래 보기에서 동의 여부를 선택해 주세요.</p>
+          <p><strong>수집하는 자:</strong> 한국사회복지행정학회</p>
+          <p><strong>개인정보 수집 및 이용 목적:</strong> 스마일리지 이용</p>
+          <p><strong>수집하는 개인정보 항목:</strong> 이름, 연락처, 마일리지 현황 등 앱 이용에 관한 전반적 현황</p>
+          <p><strong>개인정보 보유 및 이용 기간:</strong> 수집 일로부터 앱 이용 종료 시</p>
+          <p>※ 귀하께서는 동의하지 않을 권리가 있습니다. 동의하지 않을 경우 스마일리지 참여에서 제외됨을 알려드립니다.</p>
+          <p><strong>개인정보 수집과 이용에 동의하시나요?</strong></p>
+        </div>
+        <label className="consent-check">
+          <input checked={form.privacyConsent} onChange={(event) => setForm({ ...form, privacyConsent: event.target.checked })} type="checkbox" />
+          <span>동의합니다.</span>
+        </label>
+      </section>
+      <button className="primary" disabled={loading || !form.privacyConsent} type="submit"><UserPlus size={17} /> 가입 신청</button>
     </form>
   );
 }
@@ -1227,6 +1254,7 @@ function SignupAdmin({ data, approveSignup, rejectSignup }) {
             <div>
               <strong>{req.name} · {statusText(req.status)}</strong>
               <p>{req.affiliation} · {formatPhoneNumber(req.phone)}</p>
+              {req.privacyConsent && <p className="muted-line">개인정보 수집·이용 동의 · {formatDateTime(req.privacyConsentAt)}</p>}
               <small>{formatDateTime(req.requestedAt)}</small>
             </div>
             {req.status === "pending" && (
@@ -1902,11 +1930,11 @@ function formatDateTime(value) {
 
 function downloadExcel(data) {
   const sheets = [
-    { name: "회원", columns: ["이름", "소속", "전화번호", "권한", "비밀번호", "가입일"], rows: data.members.map((m) => [m.name, m.affiliation, formatPhoneNumber(m.phone), isSubAdminMember(m) ? "부관리자" : "회원", m.password, formatDateTime(m.joinedAt)]) },
+    { name: "회원", columns: ["이름", "소속", "전화번호", "권한", "비밀번호", "개인정보동의", "동의일", "가입일"], rows: data.members.map((m) => [m.name, m.affiliation, formatPhoneNumber(m.phone), isSubAdminMember(m) ? "부관리자" : "회원", m.password, m.privacyConsent ? "동의" : "", formatDateTime(m.privacyConsentAt), formatDateTime(m.joinedAt)]) },
     { name: "마일리지", columns: ["회원", "소속", "전화번호", "구분", "금액", "권", "호", "논문제목", "메모", "입력자", "일시"], rows: data.mileageRecords.map((r) => [r.memberName, r.memberAffiliation, formatPhoneNumber(r.memberPhone), r.type, r.amount, r.volume, r.issue, r.paperTitle, r.note, r.editorName, formatDateTime(r.createdAt)]) },
     { name: "사용요청", columns: ["회원", "소속", "전화번호", "금액", "상태", "메모", "요청일", "처리일", "처리자"], rows: data.usageRequests.map((r) => [r.memberName, r.memberAffiliation, formatPhoneNumber(r.memberPhone), r.amount, r.status, r.note, formatDateTime(r.createdAt), formatDateTime(r.reviewedAt), r.reviewedBy]) },
     { name: "비번요청", columns: ["이름", "전화번호", "비밀번호", "상태", "메시지", "일시"], rows: data.pwRequests.map((r) => [r.name, formatPhoneNumber(r.phone), findPwMember(r, data.members)?.password || r.resolvedPassword, r.status, r.message, formatDateTime(r.createdAt)]) },
-    { name: "가입신청", columns: ["이름", "소속", "전화번호", "상태", "신청일"], rows: data.signupRequests.map((r) => [r.name, r.affiliation, formatPhoneNumber(r.phone), r.status, formatDateTime(r.requestedAt)]) },
+    { name: "가입신청", columns: ["이름", "소속", "전화번호", "상태", "개인정보동의", "동의일", "신청일"], rows: data.signupRequests.map((r) => [r.name, r.affiliation, formatPhoneNumber(r.phone), r.status, r.privacyConsent ? "동의" : "", formatDateTime(r.privacyConsentAt), formatDateTime(r.requestedAt)]) },
     { name: "삭제이유", columns: ["기록구분", "삭제건수", "삭제이유", "삭제자", "삭제일", "삭제대상"], rows: data.deletionLogs.map((r) => [r.label, r.count, r.reason, r.deletedBy, formatDateTime(r.deletedAt), Array.isArray(r.deletedRecords) ? r.deletedRecords.map(deletionRecordText).join(" / ") : ""]) },
   ];
   const xml = `<?xml version="1.0" encoding="UTF-8"?><?mso-application progid="Excel.Sheet"?><Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">${sheets.map(sheetXml).join("")}</Workbook>`;

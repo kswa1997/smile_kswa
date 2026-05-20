@@ -453,6 +453,52 @@ textarea {
   border: 1.5px solid var(--line);
 }
 
+.consent-box {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1.5px solid var(--line);
+  border-radius: 8px;
+  background: #fbfefd;
+}
+
+.consent-box h3 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.consent-text {
+  display: grid;
+  gap: 7px;
+  color: var(--ink);
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.consent-text p {
+  margin: 0;
+}
+
+.consent-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-top: 4px;
+}
+
+.consent-check input {
+  width: 18px;
+  min-height: 18px;
+  padding: 0;
+  accent-color: var(--brand-blue);
+}
+
+.muted-line {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 800;
+}
+
 .alert {
   color: #1d7a55;
   background: #eefcf6;
