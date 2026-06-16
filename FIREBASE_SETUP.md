@@ -16,6 +16,12 @@ URL 예시는 다음과 비슷합니다.
 https://smile-of-kswa-default-rtdb.asia-southeast1.firebasedatabase.app
 ```
 
+현재 `smile-of-kswa` 프로젝트에서 확인된 기본 URL은 아래 형식입니다.
+
+```txt
+https://smile-of-kswa-default-rtdb.firebaseio.com
+```
+
 ## 2. Vercel 환경변수 추가
 
 Vercel 프로젝트 설정에서 다음 환경변수를 추가합니다.
@@ -28,7 +34,9 @@ VITE_FIREBASE_DB_URL=Firebase에서 복사한 Realtime Database URL
 
 ## 3. 권한 오류가 나올 때
 
-Realtime Database가 만들어졌는데도 저장이 안 되면 규칙 문제일 가능성이 큽니다. 개발/테스트 중에는 아래처럼 임시로 열 수 있습니다.
+Realtime Database가 만들어졌는데도 `Permission denied`, `401`, `403`, `PATCH ... failed`가 보이면 규칙 문제일 가능성이 큽니다.
+
+Firebase 콘솔에서 `Build` > `Realtime Database` > `규칙` 탭으로 이동한 뒤, 개발/테스트 중에는 아래처럼 임시로 열고 `게시`를 눌러 반영합니다.
 
 ```json
 {

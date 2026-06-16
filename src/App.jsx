@@ -61,7 +61,7 @@ const EMPTY_DATA = {
 };
 
 function App() {
-  const [data, setData] = useState(readLocalData);
+  const [data, setData] = useState(createEmptyData);
   const [user, setUser] = useState(() => readStorage(STORAGE.user, null));
   const [isAdmin, setIsAdmin] = useState(() => readStorage(STORAGE.admin, false));
   const [page, setPage] = useState(user ? "home" : "auth");
@@ -80,7 +80,7 @@ function App() {
   function updateData(next) {
     dataRef.current = next;
     setData(next);
-    writeStorage(STORAGE.data, next);
+    writeStorage(STORAGE.data, null);
   }
 
   function markHistoryRecordsViewed(kind, records) {
@@ -107,6 +107,49 @@ function App() {
   const pendingPwCount = data.pwRequests.filter((item) => item.status === "pending").length;
   const pendingUsageCount = data.usageRequests.filter((item) => item.status === "pending").length;
 
+  useEffect(() => {
+    writeStorage(STORAGE.data, null);
+    if (!user) return undefined;
+    let cancelled = false;
+    setLoading(true);
+    fetchRemoteData()
+      .then((remote) => {
+        if (cancelled) return;
+        updateData(remote);
+        if (!isAdmin) {
+          const freshUser = remote.members.find((member) => member.id === user.id);
+          if (!freshUser) {
+            setUser(null);
+            setIsAdmin(false);
+            writeStorage(STORAGE.user, null);
+            writeStorage(STORAGE.admin, false);
+            setPage("auth");
+            setError("회원 정보를 Firebase에서 찾을 수 없습니다. 다시 로그인해주세요.");
+            return;
+          }
+          setUser(freshUser);
+          writeStorage(STORAGE.user, freshUser);
+        }
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        console.error(err);
+        updateData(createEmptyData());
+        setUser(null);
+        setIsAdmin(false);
+        writeStorage(STORAGE.user, null);
+        writeStorage(STORAGE.admin, false);
+        setPage("auth");
+        setError(firebaseLoadErrorText(err));
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   async function refreshData({ silent = false } = {}) {
     if (!silent) setLoading(true);
     try {
@@ -122,8 +165,9 @@ function App() {
       return remote;
     } catch (err) {
       console.error(err);
-      if (!silent) setError("Firebase 데이터를 불러오지 못했습니다.");
-      return dataRef.current;
+      if (!silent) setError(firebaseLoadErrorText(err));
+      updateData(createEmptyData());
+      return createEmptyData();
     } finally {
       if (!silent) setLoading(false);
     }
@@ -138,7 +182,7 @@ function App() {
     if (form.name.trim() === ADMIN_ID) {
       setLoading(true);
       try {
-        const remote = await fetchRemoteData().catch(() => dataRef.current);
+        const remote = await fetchRemoteData();
         updateData(remote);
         if (form.password.trim() !== getAdminPassword(remote)) {
           setError("관리자 ID 또는 비밀번호가 일치하지 않습니다.");
@@ -150,6 +194,9 @@ function App() {
         writeStorage(STORAGE.user, adminUser);
         writeStorage(STORAGE.admin, true);
         setPage("home");
+      } catch (err) {
+        console.error(err);
+        setError(firebaseLoadErrorText(err));
       } finally {
         setLoading(false);
       }
@@ -1681,9 +1728,29 @@ function firebaseErrorText(err, action) {
   return `${action}을 저장하지 못했습니다. 잠시 후 다시 시도해주세요.`;
 }
 
-function readLocalData() {
-  const stored = readStorage(STORAGE.data, {});
-  return { ...EMPTY_DATA, ...stored, settings: { ...DEFAULT_SETTINGS, ...(stored.settings || {}) } };
+function firebaseLoadErrorText(err) {
+  const text = String(err?.message || err || "");
+  if (err?.code === "DB_NOT_FOUND" || err?.status === 404 || text.includes("404")) {
+    return "Firebase 데이터를 불러오지 못했습니다. Realtime Database 주소가 맞는지 확인해주세요.";
+  }
+  if (err?.status === 401 || err?.status === 403 || text.includes("401") || text.includes("403") || text.toLowerCase().includes("permission")) {
+    return "Firebase 데이터를 불러오지 못했습니다. Realtime Database 규칙에서 읽기/쓰기를 허용했는지 확인해주세요.";
+  }
+  return "Firebase 데이터를 불러오지 못했습니다. 네트워크 연결 후 다시 시도해주세요.";
+}
+
+function createEmptyData() {
+  return {
+    ...EMPTY_DATA,
+    members: [],
+    signupRequests: [],
+    mileageRecords: [],
+    pwRequests: [],
+    usageRequests: [],
+    withdrawals: [],
+    deletionLogs: [],
+    settings: { ...DEFAULT_SETTINGS },
+  };
 }
 
 function readStorage(key, fallback) {
